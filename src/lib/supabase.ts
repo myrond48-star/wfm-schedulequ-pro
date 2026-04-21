@@ -1,6 +1,10 @@
 export const getDbCredentials = () => {
-  const url = localStorage.getItem('SUPABASE_URL') || '';
+  let url = localStorage.getItem('SUPABASE_URL') || '';
   const key = localStorage.getItem('SUPABASE_KEY') || '';
+  
+  // Clean up user input just in case they added /rest/v1 or trailing slashes
+  url = url.replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
+  
   return { url, key };
 };
 
