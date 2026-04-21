@@ -605,7 +605,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
           "wfm_traffic_forecast",
           "GET",
           undefined,
-          `?channel=eq.${channel}&timestamp=gte.${start}&timestamp=lte.${end}&type=in.(monthly,monthly_hc,param_aht,param_resp,param_sla,param_shrink,param_occ,param_util,param_staff)&select=timestamp,volume,type`,
+          `?channel=eq.${channel}&timestamp=gte.${start}&timestamp=lte.${end}&type=in.(monthly,monthly_hc,interval_agents,param_aht,param_resp,param_sla,param_shrink,param_occ,param_util,param_staff)&select=timestamp,volume,type&limit=500000`,
         ),
         callSupabaseAPI(
           "wfm_schedules",
@@ -622,6 +622,18 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
       ];
 
       for (const y of yearsToFetch) {
+        // Extract parameters for the year FIRST so we can use them for fallback calculations
+        const yearParams: Record<string, number> = {};
+        if (forecastRes) {
+          forecastRes.forEach((d: any) => {
+            const dt = new Date(d.timestamp);
+            if (dt.getUTCFullYear() === y && d.type && d.type.startsWith('param_')) {
+              const key = d.type.replace('param_', '');
+              yearParams[key] = d.volume;
+            }
+          });
+        }
+
         const grouped = monthNames.map((mStr, monthIdx) => {
           const monthTraffic = res
             ? res.filter((d: any) => {
@@ -643,6 +655,57 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
             });
           }
 
+          // Fallback calculation for older forecasts that don't have monthly_hc stored in the DB
+          if (forecastHC === 0 && forecastRes) {
+            const monthIntervals = forecastRes.filter((d: any) => 
+               d.type === 'interval_agents' && 
+               new Date(d.timestamp).getUTCFullYear() === y && 
+               new Date(d.timestamp).getUTCMonth() === monthIdx
+            );
+
+            if (monthIntervals.length > 0) {
+              const workingDaysInMonth = new Set<string>();
+              const daysInMonth = new Date(y, monthIdx + 1, 0).getDate();
+              for (let day = 1; day <= daysInMonth; day++) {
+                const dt = new Date(Date.UTC(y, monthIdx, day));
+                const dateStr = dt.toISOString().split('T')[0];
+                const isHoliday = !!settings.holidays[dateStr];
+                const biz = settings.bizRules || { operatingHours: {}, weekendDays: [0, 6], holidayClosed: true };
+                const isWeekend = biz.weekendDays.includes(dt.getUTCDay());
+                if (!(isHoliday && biz.holidayClosed) && !isWeekend) {
+                  workingDaysInMonth.add(dateStr);
+                }
+              }
+              const numWorkingDays = workingDaysInMonth.size || 22;
+
+              // 1. semua forecast interval dijumlahkan (berdasarkan waktu intervalnya)
+              const timeSums: Record<string, number> = {};
+              monthIntervals.forEach((d: any) => {
+                const dt = new Date(d.timestamp);
+                const timeKey = `${dt.getUTCHours()}:${dt.getUTCMinutes()}`;
+                timeSums[timeKey] = (timeSums[timeKey] || 0) + (d.volume || 0);
+              });
+
+              // 2. dibagi dengan jumlah hari kerja
+              const timeAverages: Record<string, number> = {};
+              Object.entries(timeSums).forEach(([time, total]) => {
+                timeAverages[time] = total / numWorkingDays;
+              });
+
+              // 3. ditotalkan semuanya
+              const totalAverageAgents = Object.values(timeAverages).reduce((a, b) => a + b, 0);
+
+              // 4. dibagi dengan (stafftime * utilisasi)
+              const intervalsInDay = Object.keys(timeSums).length;
+              const hoursPerInterval = intervalsInDay > 0 ? 24 / intervalsInDay : 0;
+              const totalAverageHours = totalAverageAgents * hoursPerInterval;
+
+              const staffTime = yearParams.staff || 9;
+              const util = (yearParams.util || 80) / 100;
+              forecastHC = Math.ceil(totalAverageHours / (staffTime * util));
+            }
+          }
+
           // Calculate "HC Actual" from schedules
           let actualHC = 0;
           if (schedulesRes && schedulesRes.length > 0) {
@@ -656,18 +719,6 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
 
           return { month: mStr, actual, forecast, actualHC, forecastHC };
         });
-
-        // Extract parameters for the year
-        const yearParams: Record<string, number> = {};
-        if (forecastRes) {
-          forecastRes.forEach((d: any) => {
-            const dt = new Date(d.timestamp);
-            if (dt.getUTCFullYear() === y && d.type.startsWith('param_')) {
-              const key = d.type.replace('param_', '');
-              yearParams[key] = d.volume;
-            }
-          });
-        }
 
         allYearsData.push({ year: y, data: grouped, params: Object.keys(yearParams).length > 0 ? yearParams : null });
       }
@@ -1245,6 +1296,68 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
         );
       }
 
+      const monthHCPayloads: any[] = [];
+          
+      // Generate Monthly HC accurately based on intervals being saved
+      monthsAffected.forEach(monthStr => { // monthStr is "YYYY-MM"
+        const [yStr, mStr] = monthStr.split('-');
+        const y = parseInt(yStr);
+        const monthIdx = parseInt(mStr) - 1;
+        
+        const mResults = intervalResults.filter(ir => ir.timestamp.startsWith(monthStr));
+        
+        if (mResults.length > 0) {
+            const workingDaysInMonth = new Set<string>();
+            const daysInMonth = new Date(y, monthIdx + 1, 0).getDate();
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dt = new Date(Date.UTC(y, monthIdx, day));
+                const dateStr = formatInUTC(dt, "yyyy-MM-dd");
+                const isHoliday = !!settings.holidays[dateStr];
+                const biz = settings.bizRules || { operatingHours: {}, weekendDays: [0, 6], holidayClosed: true };
+                const isWeekend = biz.weekendDays.includes(dt.getUTCDay());
+                if (!(isHoliday && biz.holidayClosed) && !isWeekend) {
+                    workingDaysInMonth.add(dateStr);
+                }
+            }
+            const numWorkingDays = workingDaysInMonth.size || 22;
+
+            const timeSums: Record<string, number> = {};
+            mResults.forEach(ir => {
+                const dt = new Date(ir.timestamp);
+                const timeKey = `${dt.getUTCHours()}:${dt.getUTCMinutes()}`;
+                const agents = calculateAgents(
+                    Number(targetSLA), Number(targetResponseTime), ir.volume,
+                    Number(targetAHT), Number(targetShrinkage), Number(targetMaxOccupancy),
+                    intervalSize * 60, true, channel
+                );
+                timeSums[timeKey] = (timeSums[timeKey] || 0) + agents;
+            });
+
+            const timeAverages: Record<string, number> = {};
+            Object.entries(timeSums).forEach(([time, total]) => {
+                timeAverages[time] = total / numWorkingDays;
+            });
+            const totalAverageAgents = Object.values(timeAverages).reduce((a, b) => a + b, 0);
+
+            const intervalsInDay = Object.keys(timeSums).length;
+            const hoursPerInterval = intervalsInDay > 0 ? 24 / intervalsInDay : 0;
+            const totalAverageHours = totalAverageAgents * hoursPerInterval;
+
+            const staffTime = Number(targetStaffTime) || 9;
+            const util = (Number(targetUtilization) || 80) / 100;
+            const monthHC = Math.ceil(totalAverageHours / (staffTime * util));
+
+            if (monthHC > 0) {
+                monthHCPayloads.push({
+                    channel,
+                    timestamp: `${monthStr}-01T00:00:00Z`,
+                    volume: monthHC,
+                    type: "monthly_hc"
+                });
+            }
+        }
+      });
+
       const yearStr = intervalForecastStart.split('-')[0];
       const startOfYear = `${yearStr}-01-01T00:00:00Z`;
       const endOfYear = `${yearStr}-12-31T23:59:59Z`;
@@ -1311,6 +1424,23 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
 
         await callSupabaseAPI("wfm_traffic_forecast", "POST", finalPayload);
       }
+
+      // Delete existing monthly_hc for the generated months only
+      for (const monthStr of monthsAffected) {
+        const startMonth = `${monthStr}-01T00:00:00Z`;
+        const endMonth = `${monthStr}-31T23:59:59Z`; 
+        await callSupabaseAPI(
+            "wfm_traffic_forecast",
+            "DELETE",
+            undefined,
+            `?channel=eq.${channel}&timestamp=gte.${startMonth}&timestamp=lte.${endMonth}&type=eq.monthly_hc`,
+        );
+      }
+
+      if (monthHCPayloads.length > 0) {
+        await callSupabaseAPI("wfm_traffic_forecast", "POST", monthHCPayloads);
+      }
+
       alert(`Forecast results and parameters for ${yearStr} saved successfully.`);
       fetchMonthlyData();
     } catch (err: any) {
@@ -1638,76 +1768,6 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
           volume: d.final,
           type: "monthly",
         });
-
-        // Compute Monthly HC to save explicitly
-        let monthHC = 0;
-        const mResults = intervalResults.filter(ir => {
-          const dt = new Date(ir.timestamp);
-          return dt.getUTCMonth() === monthIdx && dt.getUTCFullYear() === forecastYear;
-        });
-
-        // Calculate working days for estimate
-        const workingDaysInMonth = new Set<string>();
-        const daysInMonth = new Date(forecastYear, monthIdx + 1, 0).getDate();
-        for (let day = 1; day <= daysInMonth; day++) {
-          const dt = new Date(Date.UTC(forecastYear, monthIdx, day));
-          const dateStr = formatInUTC(dt, "yyyy-MM-dd");
-          const isHoliday = !!settings.holidays[dateStr];
-          const biz = settings.bizRules || { operatingHours: {}, weekendDays: [0, 6], holidayClosed: true };
-          const isWeekend = biz.weekendDays.includes(dt.getUTCDay());
-          if (!(isHoliday && biz.holidayClosed) && !isWeekend) {
-            workingDaysInMonth.add(dateStr);
-          }
-        }
-        const numWorkingDays = workingDaysInMonth.size || 22;
-
-        if (mResults.length > 0) {
-          const timeSums: Record<string, number> = {};
-          
-          mResults.forEach(ir => {
-            const dt = new Date(ir.timestamp);
-            const dateStr = formatInUTC(dt, "yyyy-MM-dd");
-            
-            // Still check working days here as mResults might only cover part of the month
-            const timeKey = `${dt.getUTCHours()}:${dt.getUTCMinutes()}`;
-            const agents = calculateAgents(
-              Number(targetSLA), Number(targetResponseTime), ir.volume,
-              Number(targetAHT), Number(targetShrinkage), Number(targetMaxOccupancy),
-              intervalSize * 60, true, channel
-            );
-            timeSums[timeKey] = (timeSums[timeKey] || 0) + agents;
-          });
-
-          // 1. Jumlah keseluruhan masing-masing interval dibagi hari kerja
-          const timeAverages: Record<string, number> = {};
-          Object.entries(timeSums).forEach(([time, total]) => {
-            timeAverages[time] = total / numWorkingDays;
-          });
-          
-          // 2. Totalkan keseluruhannya / (stafftime * utilisasi)
-          const totalAverageAgents = Object.values(timeAverages).reduce((a, b) => a + b, 0);
-          
-          const staffTime = Number(targetStaffTime) || 9;
-          const util = (Number(targetUtilization) || 80) / 100;
-          monthHC = Math.ceil(totalAverageAgents / (staffTime * util));
-        } else if (d.final > 0) {
-          // Fallback if no interval results: Basic rough calculation
-          const aht = Number(targetAHT);
-          const staffTime = Number(targetStaffTime) || 9;
-          const util = (Number(targetUtilization) || 80) / 100;
-          // Rough Estimation: Volume * AHT / (WorkingDays * StaffTime * 3600 * Util)
-          monthHC = Math.ceil((d.final * aht) / (numWorkingDays * staffTime * 3600 * util));
-        }
-
-        // Push HC monthly explicitly
-        if (monthHC > 0) {
-           payload.push({
-             channel,
-             timestamp: date.toISOString(),
-             volume: monthHC,
-             type: "monthly_hc",
-           });
-        }
       });
 
       // Delete existing forecast for that year/channel first (only monthly types + parameters)
@@ -1737,7 +1797,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
         "wfm_traffic_forecast",
         "DELETE",
         undefined,
-        `?channel=eq.${channel}&timestamp=gte.${start}&timestamp=lte.${end}&type=in.(monthly,monthly_hc,param_aht,param_resp,param_sla,param_shrink,param_occ,param_util,param_staff)`,
+        `?channel=eq.${channel}&timestamp=gte.${start}&timestamp=lte.${end}&type=in.(monthly,param_aht,param_resp,param_sla,param_shrink,param_occ,param_util,param_staff)`,
       );
 
       // Insert new forecast

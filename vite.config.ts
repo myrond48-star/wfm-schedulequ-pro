@@ -8,6 +8,18 @@ export default defineConfig(({mode}) => {
   return {
     base: '/wfm-schedulequ-pro/',
     plugins: [react(), tailwindcss()],
+    build: {
+      chunkSizeWarningLimit: 2000,
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            vendor: ['react', 'react-dom', 'lucide-react'],
+            charts: ['recharts'],
+            export: ['xlsx']
+          }
+        }
+      }
+    },
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
     },
