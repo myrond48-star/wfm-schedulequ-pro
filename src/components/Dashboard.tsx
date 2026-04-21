@@ -77,8 +77,10 @@ export const Dashboard: React.FC = () => {
         if (res) {
           setLeaders(Array.from(new Set(res.map((t: any) => t.nama))).sort());
         }
-      } catch (err) {
-        console.error("Failed to fetch leaders:", err);
+      } catch (err: any) {
+        if (!err.message?.includes('Database API not configured')) {
+           console.error("Failed to fetch leaders:", err);
+        }
       }
     };
     fetchLeaders();
