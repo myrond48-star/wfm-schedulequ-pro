@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@layer base {
+  html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background-color: #6755f2;
+    overflow: hidden;
+  }
+  
+  html {
+    font-size: 14px;
+  }
+  
+  body {
+    /* Simulate browser zoom out for a more compact dashboard feel */
+    zoom: 1.0;
+  }
+}
+
+/* For browsers that don't support zoom (Firefox), we could use transform but it's trickier with layouts */
+@supports not (zoom: 1) {
+  /* Fallback or just leave as is for now as zoom is widely supported in Chromium/Safari */
+}
