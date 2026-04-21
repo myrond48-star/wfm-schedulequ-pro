@@ -66,7 +66,8 @@ export const Dashboard: React.FC = () => {
   const masterKey = roleConf.isAdmin || 
                     userRole.toLowerCase() === 'admin' || 
                     user?.nama === 'Ronald' || 
-                    user?.nama === 'ronald';
+                    user?.nama === 'ronald' ||
+                    user?.username === 'admin';
   const ui = roleConf.allowedUI || [];
   
   React.useEffect(() => {
@@ -306,7 +307,7 @@ export const Dashboard: React.FC = () => {
 
       {/* Main Content Area */}
       <div className="flex-1 bg-white rounded-3xl border border-slate-200 shadow-lg overflow-hidden relative animate-in fade-in duration-300">
-        {!settings.apiUrl || !settings.apiKey ? (
+        {(!settings.apiUrl || !settings.apiKey) && currentView !== 'settings' ? (
           <div className="h-full flex flex-col items-center justify-center p-10 text-center">
             <div className="text-6xl mb-4">🔌</div>
             <h2 className="text-2xl font-bold text-slate-800 mb-2">Database API Not Configured</h2>
