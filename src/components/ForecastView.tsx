@@ -1646,27 +1646,29 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
           return dt.getUTCMonth() === monthIdx && dt.getUTCFullYear() === forecastYear;
         });
 
+        // Calculate working days for estimate
+        const workingDaysInMonth = new Set<string>();
+        const daysInMonth = new Date(forecastYear, monthIdx + 1, 0).getDate();
+        for (let day = 1; day <= daysInMonth; day++) {
+          const dt = new Date(Date.UTC(forecastYear, monthIdx, day));
+          const dateStr = formatInUTC(dt, "yyyy-MM-dd");
+          const isHoliday = !!settings.holidays[dateStr];
+          const biz = settings.bizRules || { operatingHours: {}, weekendDays: [0, 6], holidayClosed: true };
+          const isWeekend = biz.weekendDays.includes(dt.getUTCDay());
+          if (!(isHoliday && biz.holidayClosed) && !isWeekend) {
+            workingDaysInMonth.add(dateStr);
+          }
+        }
+        const numWorkingDays = workingDaysInMonth.size || 22;
+
         if (mResults.length > 0) {
           const timeSums: Record<string, number> = {};
-          
-          // Identify working days for this month
-          const workingDays = new Set<string>();
-          const allDatesInMonth = new Set<string>();
           
           mResults.forEach(ir => {
             const dt = new Date(ir.timestamp);
             const dateStr = formatInUTC(dt, "yyyy-MM-dd");
-            allDatesInMonth.add(dateStr);
             
-            // Check holiday closure
-            const isHoliday = !!settings.holidays[dateStr];
-            const biz = settings.bizRules || { operatingHours: {}, weekendDays: [0, 6], holidayClosed: true };
-            const isWeekend = biz.weekendDays.includes(dt.getUTCDay());
-            
-            if (!(isHoliday && biz.holidayClosed) && !isWeekend) {
-              workingDays.add(dateStr);
-            }
-
+            // Still check working days here as mResults might only cover part of the month
             const timeKey = `${dt.getUTCHours()}:${dt.getUTCMinutes()}`;
             const agents = calculateAgents(
               Number(targetSLA), Number(targetResponseTime), ir.volume,
@@ -1677,7 +1679,6 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
           });
 
           // 1. Jumlah keseluruhan masing-masing interval dibagi hari kerja
-          const numWorkingDays = workingDays.size || 1;
           const timeAverages: Record<string, number> = {};
           Object.entries(timeSums).forEach(([time, total]) => {
             timeAverages[time] = total / numWorkingDays;
@@ -1689,6 +1690,13 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
           const staffTime = Number(targetStaffTime) || 9;
           const util = (Number(targetUtilization) || 80) / 100;
           monthHC = Math.ceil(totalAverageAgents / (staffTime * util));
+        } else if (d.final > 0) {
+          // Fallback if no interval results: Basic rough calculation
+          const aht = Number(targetAHT);
+          const staffTime = Number(targetStaffTime) || 9;
+          const util = (Number(targetUtilization) || 80) / 100;
+          // Rough Estimation: Volume * AHT / (WorkingDays * StaffTime * 3600 * Util)
+          monthHC = Math.ceil((d.final * aht) / (numWorkingDays * staffTime * 3600 * util));
         }
 
         // Push HC monthly explicitly

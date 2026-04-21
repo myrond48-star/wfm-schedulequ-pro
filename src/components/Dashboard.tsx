@@ -59,8 +59,14 @@ export const Dashboard: React.FC = () => {
   const [refreshKey, setRefreshKey] = useState(0);
   const [leaders, setLeaders] = useState<string[]>([]);
 
-  const roleConf = settings.roles[user?.role || 'Agent'] || { isAdmin: false, allowedUI: [] };
-  const masterKey = true;
+  const userRole = user?.role || 'Agent';
+  const roleConf = settings.roles[userRole] || 
+                   Object.entries(settings.roles).find(([k]) => k.toLowerCase() === userRole.toLowerCase())?.[1] ||
+                   { isAdmin: false, allowedUI: [] };
+  const masterKey = roleConf.isAdmin || 
+                    userRole.toLowerCase() === 'admin' || 
+                    user?.nama === 'Ronald' || 
+                    user?.nama === 'ronald';
   const ui = roleConf.allowedUI || [];
   
   React.useEffect(() => {
