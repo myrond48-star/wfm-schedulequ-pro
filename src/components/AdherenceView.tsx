@@ -468,13 +468,11 @@ export const AdherenceView: React.FC<AdherenceViewProps> = ({ channel, date, sor
                         
                         let bgClass = 'bg-yellow-400';
                         let actNameLabel = currentAct;
-                        if (currentAct === 'LB') { bgClass = 'bg-[#7ffafa]'; actNameLabel = 'Long Break'; }
-                        else if (currentAct === 'SB') { bgClass = 'bg-[#7ffafa]'; actNameLabel = 'Short Break'; }
-                        else if (currentAct === 'MT') { bgClass = 'bg-[#ea7efc]'; actNameLabel = 'Meeting'; }
-                        else if (currentAct === 'SK') { bgClass = 'bg-[#1bfa62]'; actNameLabel = 'Sick'; }
-                        else if (currentAct === 'PR') { bgClass = 'bg-[#36537d]'; actNameLabel = 'Permit'; }
-                        else if (currentAct === 'CT') { bgClass = 'bg-[#dde334]'; actNameLabel = 'Leave'; }
-                        else if (currentAct === 'AL') { bgClass = 'bg-[#fca5a5]'; actNameLabel = 'Absent/Alpha'; }
+                        
+                        if (settings.activities?.[currentAct]) {
+                          bgClass = settings.activities[currentAct].color;
+                          actNameLabel = settings.activities[currentAct].label;
+                        }
                         
                         scheduleBlocks.push({
                           title: actNameLabel,
@@ -712,7 +710,7 @@ export const AdherenceView: React.FC<AdherenceViewProps> = ({ channel, date, sor
       </div>
 
       {/* Legend Footer */}
-      <div className="flex items-center gap-4 px-6 py-2 bg-white border-t border-slate-200 z-[200]">
+      <div className="flex flex-wrap items-center gap-4 px-2 sm:px-6 py-2 bg-white border-t border-slate-200 z-[200]">
         <div className="flex items-center gap-1.5 text-[9px] text-slate-600 font-semibold whitespace-nowrap">
           <span className="w-2.5 h-2.5 rounded-sm bg-[#60a5fa]"></span> Plan
         </div>
@@ -741,8 +739,8 @@ export const AdherenceView: React.FC<AdherenceViewProps> = ({ channel, date, sor
       </div>
       {/* Exception Modal */}
       {exceptionModal && (
-        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-[20000]">
-          <div className="bg-white p-6 rounded-2xl w-[400px] shadow-2xl">
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-[20000]">
+          <div className="bg-white p-6 rounded-2xl w-full max-w-[400px] shadow-2xl">
             <h3 className="mt-0 text-slate-800 font-bold mb-4">⚡ Annul Violation (Exception)</h3>
             <div className="bg-slate-50 p-3 rounded-xl text-xs mb-4 border border-slate-200">
               <strong className="text-indigo-600 text-sm">{exceptionModal.nama} ({exceptionModal.nik})</strong><br/>
@@ -769,7 +767,7 @@ export const AdherenceView: React.FC<AdherenceViewProps> = ({ channel, date, sor
       {/* Custom Tooltip */}
       {tooltip && (
         <div 
-          className="fixed pointer-events-none z-[10000] bg-slate-900/90 text-white px-3 py-2 rounded-lg text-[11px] shadow-xl border border-slate-700 backdrop-blur-sm"
+          className="fixed pointer-events-none z-[20000] bg-slate-900/95 text-white px-3 py-2 rounded-lg text-[11px] shadow-2xl border border-slate-700 backdrop-blur-sm animate-in fade-in zoom-in duration-150"
           style={{ left: tooltip.x, top: tooltip.y }}
         >
           {tooltip.content}

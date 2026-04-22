@@ -15,6 +15,7 @@ export interface SystemSettings {
   puasaShifts: Record<string, any>;
   roles: Record<string, any>;
   publishStatus: Record<string, any>;
+  activities: Record<string, { label: string; color: string; duration?: string; category?: string }>;
   bizRules: {
     operatingHours: Record<string, { start: string; end: string; closed: boolean }>;
     weekendDays: number[];
@@ -69,6 +70,7 @@ const defaultSettings: SystemSettings = {
   puasa: getEnvOrLocalJSON('WFM_PUASA', 'VITE_WFM_PUASA', '[]'),
   puasaShifts: getEnvOrLocalJSON('WFM_PUASA_SHIFTS', 'VITE_WFM_PUASA_SHIFTS', '{}'),
   roles: getEnvOrLocalJSON('WFM_ROLES', 'VITE_WFM_ROLES', '{"Agent":{"canSwap":true,"isAdmin":false,"canEditSchedule":false,"canSeeAll":false,"allowedActivities":[],"allowedUI":["viewInt","viewCal","viewAdh"]},"Leader":{"canSwap":true,"isAdmin":false,"canEditSchedule":true,"canSeeAll":true,"allowedActivities":["MT","CT","PR","SK","AL"],"allowedUI":["viewInt","viewCal","viewAdh","btnApp"]},"Admin":{"canSwap":true,"isAdmin":true,"canEditSchedule":true,"canSeeAll":true,"allowedActivities":["MT","CT","PR","SK","AL","SB","LB","REMOVE"],"allowedUI":["viewInt","viewCal","viewAdh","viewFor","btnApp","btnBrk","btnSync","btnSys","btnImp","btnPub"]}}'),
+  activities: getEnvOrLocalJSON('WFM_ACTIVITIES', 'VITE_WFM_ACTIVITIES', '{"LB":{"label":"Long Break","color":"bg-cyan-200","duration":"full","category":"break"},"SB":{"label":"Short Break","color":"bg-cyan-200","duration":"1","category":"break"},"MT":{"label":"Meeting","color":"bg-fuchsia-300","duration":"custom","category":"work"},"SK":{"label":"Sick","color":"bg-emerald-400","duration":"full","category":"absence"},"PR":{"label":"Permit","color":"bg-slate-500","duration":"custom","category":"absence"},"CT":{"label":"Leave","color":"bg-yellow-400","duration":"full","category":"absence"},"AL":{"label":"Absent/Alpha","color":"bg-red-300","duration":"full","category":"absence"}}'),
   publishStatus: getEnvOrLocalJSON('WFM_PUBLISH_STATUS', 'VITE_WFM_PUBLISH_STATUS', '{}'),
   bizRules: getEnvOrLocalJSON('WFM_BIZ_RULES', 'VITE_WFM_BIZ_RULES', '{"operatingHours":{},"weekendDays":[0,6],"holidayClosed":true}'),
 };
@@ -114,6 +116,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (row.key === 'WFM_PUASA') cloudSettings.puasa = val;
             if (row.key === 'WFM_PUASA_SHIFTS') cloudSettings.puasaShifts = val;
             if (row.key === 'WFM_ROLES') cloudSettings.roles = val;
+            if (row.key === 'WFM_ACTIVITIES') cloudSettings.activities = val;
             if (row.key === 'WFM_BIZ_RULES') cloudSettings.bizRules = val;
             if (row.key === 'ADH_SS_ID') cloudSettings.adhId = val;
           } catch (e) {
@@ -213,6 +216,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (newSettings.roles !== undefined) {
       localStorage.setItem('WFM_ROLES', JSON.stringify(newSettings.roles));
       syncToCloud('WFM_ROLES', newSettings.roles);
+    }
+    if (newSettings.activities !== undefined) {
+      localStorage.setItem('WFM_ACTIVITIES', JSON.stringify(newSettings.activities));
+      syncToCloud('WFM_ACTIVITIES', newSettings.activities);
     }
     if (newSettings.publishStatus !== undefined) {
       localStorage.setItem('WFM_PUBLISH_STATUS', JSON.stringify(newSettings.publishStatus));

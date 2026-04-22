@@ -54,6 +54,11 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
   const [reasons, setReasons] = useState<any[]>([]);
   const [tooltip, setTooltip] = useState<{ x: number, y: number, content: React.ReactNode } | null>(null);
 
+  const isBreakCode = React.useCallback((v: string | unknown) => {
+    if (typeof v !== 'string') return false;
+    return settings.activities?.[v]?.category === 'break' || v === 'LB' || v === 'SB';
+  }, [settings.activities]);
+
   const indexToTime = (idx: number) => {
     const total = idx * 15;
     const h = Math.floor(total / 60);
@@ -212,7 +217,10 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
       while (right < 95 && row.activities?.[right + 1] === currentAct) right++;
     } else {
       let span = 4; // 1 hour default
-      if (actionCode === 'SB') span = 1; // 15 min
+      const configuredDuration = settings.activities?.[actionCode]?.duration;
+      if (configuredDuration && configuredDuration !== 'custom' && configuredDuration !== 'full') {
+        span = parseInt(configuredDuration) || 4;
+      }
       right = left + span - 1;
     }
 
@@ -412,12 +420,12 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
       const activities = { ...(r.activities || {}) };
       if (isReAuto) {
         Object.keys(activities).forEach(idx => {
-          if (activities[idx] === 'LB' || activities[idx] === 'SB') delete activities[idx];
+          if (isBreakCode(activities[idx])) delete activities[idx];
         });
         r.activities = activities;
       }
       Object.entries(r.activities || {}).forEach(([idx, v]) => {
-        if (v === 'LB' || v === 'SB') {
+        if (isBreakCode(v)) {
           const i = Number(idx);
           breakCounter[i] = (breakCounter[i] || 0) + 1;
         }
@@ -434,7 +442,7 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
 
         // 1. Handle S4 Prev (00:00 - 07:00)
         if (r.shift_prev === 'S4') {
-          const hasPrevBreak = Object.entries(activities).some(([idx, v]) => Number(idx) < 28 && (v === 'LB' || v === 'SB'));
+          const hasPrevBreak = Object.entries(activities).some(([idx, v]) => Number(idx) < 28 && isBreakCode(v));
           if (isReAuto || !hasPrevBreak) {
             const rules = (settings.autoBreak['S4'] || []).filter(t => {
               const h = parseInt(t.split(':')[0]);
@@ -451,7 +459,7 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
 
         // 2. Handle Current Shift (excluding S4 start part)
         if (r.shift !== 'OFF' && r.shift !== 'S4' && settings.shifts[r.shift]) {
-          const hasCurrentBreak = Object.entries(activities).some(([idx, v]) => Number(idx) >= 28 && (v === 'LB' || v === 'SB'));
+          const hasCurrentBreak = Object.entries(activities).some(([idx, v]) => Number(idx) >= 28 && isBreakCode(v));
           if (isReAuto || !hasCurrentBreak) {
             const demo = demographics[r.nik] || {};
             const rel = (demo.religion || '').toUpperCase();
@@ -554,7 +562,7 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
         const activities = { ...(r.activities || {}) };
         let changed = false;
         Object.keys(activities).forEach(idx => {
-          if (activities[idx] === 'LB' || activities[idx] === 'SB') {
+          if (isBreakCode(activities[idx])) {
             delete activities[idx];
             changed = true;
           }
@@ -676,7 +684,15 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
                 {reqs.map((v, i) => {
                   const operational = isTimeOperational(i);
                   return (
-                    <th key={i} className={`sticky top-0 z-[100] bg-slate-50 min-w-[18px] w-[18px] text-[9px] text-slate-700 font-medium ${!operational ? 'opacity-30' : ''}`}>{v}</th>
+                    <th 
+                      key={i} 
+                      className={`sticky top-0 z-[100] bg-slate-50 min-w-[18px] w-[18px] text-[9px] text-slate-700 font-medium ${!operational ? 'opacity-30' : ''}`}
+                      onMouseEnter={(e) => handleMouseEnter(e, <div className="font-bold text-rose-300">Required: {v} agents</div>)}
+                      onMouseMove={handleMouseMove}
+                      onMouseLeave={handleMouseLeave}
+                    >
+                      {v}
+                    </th>
                   );
                 })}
               </tr>
@@ -688,7 +704,15 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
                 <th className="sticky top-[32px] left-[215px] z-[110] bg-white w-[55px] h-[32px]"></th>
                 <th className="sticky top-[32px] left-[270px] z-[110] bg-white w-[90px] h-[32px] text-left pl-3 text-[9px] text-slate-600 font-semibold">ACTUAL ONLINE</th>
                 {actuals.map((v, i) => (
-                  <th key={i} className="sticky top-[32px] z-[100] bg-white min-w-[18px] w-[18px] text-[9px] text-slate-700 font-medium">{v}</th>
+                  <th 
+                    key={i} 
+                    className="sticky top-[32px] z-[100] bg-white min-w-[18px] w-[18px] text-[9px] text-slate-700 font-medium"
+                    onMouseEnter={(e) => handleMouseEnter(e, <div className="font-bold text-green-300">Actual: {v} agents</div>)}
+                    onMouseMove={handleMouseMove}
+                    onMouseLeave={handleMouseLeave}
+                  >
+                    {v}
+                  </th>
                 ))}
               </tr>
               {/* Coverage Gap */}
@@ -701,7 +725,17 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
                 {actuals.map((v, i) => {
                   const gap = v - reqs[i];
                   const gapClass = gap < 0 ? 'bg-rose-50 text-rose-600 font-semibold' : gap > 0 ? 'bg-green-50 text-green-600 font-semibold' : '';
-                  return <th key={i} className={`sticky top-[64px] z-[100] bg-white min-w-[18px] w-[18px] text-[9px] text-slate-700 font-medium border-b border-slate-200 ${gapClass}`}>{gap}</th>
+                  return (
+                    <th 
+                      key={i} 
+                      className={`sticky top-[64px] z-[100] bg-white min-w-[18px] w-[18px] text-[9px] text-slate-700 font-medium border-b border-slate-200 ${gapClass}`}
+                      onMouseEnter={(e) => handleMouseEnter(e, <div className={`font-bold ${gap < 0 ? 'text-rose-300' : 'text-green-300'}`}>Gap: {gap > 0 ? '+' : ''}{gap}</div>)}
+                      onMouseMove={handleMouseMove}
+                      onMouseLeave={handleMouseLeave}
+                    >
+                      {gap}
+                    </th>
+                  );
                 })}
               </tr>
               {/* Hour Row */}
@@ -771,6 +805,12 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
                       <td 
                         className="sticky left-[95px] z-[50] bg-white border-b border-slate-100 border-r-2 border-r-slate-300 text-left pl-3 text-[9px] text-slate-600 whitespace-nowrap overflow-hidden text-ellipsis box-border cursor-pointer hover:bg-slate-200 group-hover:bg-slate-100 transition-colors"
                         onContextMenu={(e) => handleContextMenu(e, 'agent', row)}
+                        onClick={() => {
+                          if (window.innerWidth < 768) {
+                            setAgentForm({ ...agentForm, nik: row.nik, nama: row.nama, tl: row.tl }); 
+                            setAgentModal({ type: 'UPDATE', row: row });
+                          }
+                        }}
                       >
                         {row.nama} {row.isPrev && <span className="text-indigo-600 text-[8px] font-bold ml-1">Prev</span>}
                       </td>
@@ -800,14 +840,9 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
                         let bgClass = '';
                         let actNameLabel = '';
 
-                        if (isBreak) {
-                          if (currentType === 'LB') { bgClass = 'bg-[#7ffafa]'; actNameLabel = 'Long Break'; }
-                          else if (currentType === 'SB') { bgClass = 'bg-[#7ffafa]'; actNameLabel = 'Short Break'; }
-                          else if (currentType === 'MT') { bgClass = 'bg-[#ea7efc]'; actNameLabel = 'Meeting'; }
-                          else if (currentType === 'SK') { bgClass = 'bg-[#1bfa62]'; actNameLabel = 'Sick'; }
-                          else if (currentType === 'PR') { bgClass = 'bg-[#36537d]'; actNameLabel = 'Permit'; }
-                          else if (currentType === 'CT') { bgClass = 'bg-[#dde334]'; actNameLabel = 'Leave'; }
-                          else if (currentType === 'AL') { bgClass = 'bg-[#fca5a5]'; actNameLabel = 'Absent/Alpha'; }
+                        if (isBreak && settings.activities?.[currentType]) {
+                          bgClass = settings.activities[currentType].color;
+                          actNameLabel = settings.activities[currentType].label;
                         }
 
                         // Tooltip logic: Activity + Time
@@ -865,6 +900,12 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
                             key={i} 
                             className="min-w-[18px] w-[18px] border-b border-slate-100 p-0 m-0 box-border cursor-crosshair hover:bg-slate-50 relative"
                             onContextMenu={(e) => handleContextMenu(e, 'cell', row, i)}
+                            onClick={(e) => {
+                              // On mobile, single tap acts as right-click to show actions
+                              if (window.innerWidth < 768) {
+                                handleContextMenu(e as unknown as React.MouseEvent, 'cell', row, i);
+                              }
+                            }}
                             onMouseEnter={(e) => handleMouseEnter(e, content)}
                             onMouseMove={handleMouseMove}
                             onMouseLeave={handleMouseLeave}
@@ -898,15 +939,33 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
           className="fixed bg-white border border-slate-200 shadow-xl rounded-xl p-1.5 min-w-[180px] z-[9999]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
-          <div className="p-2.5 cursor-pointer rounded-lg text-[11px] text-slate-700 flex items-center gap-2 font-medium hover:bg-slate-100 hover:text-indigo-600" onClick={() => handleAction('LB')}>🍔 Long Break (1H)</div>
-          <div className="p-2.5 cursor-pointer rounded-lg text-[11px] text-slate-700 flex items-center gap-2 font-medium hover:bg-slate-100 hover:text-indigo-600" onClick={() => handleAction('SB')}>☕ Short Break (15m)</div>
-          <div className="p-2.5 cursor-pointer rounded-lg text-[11px] text-slate-700 flex items-center gap-2 font-medium hover:bg-slate-100 hover:text-indigo-600" onClick={() => { setReasonModal({ row: contextMenu.row, colIdx: contextMenu.colIdx!, type: 'MT' }); setContextMenu(null); }}>👥 Meeting</div>
-          <div className="p-2.5 cursor-pointer rounded-lg text-[11px] text-slate-700 flex items-center gap-2 font-medium hover:bg-slate-100 hover:text-indigo-600" onClick={() => { setReasonModal({ row: contextMenu.row, colIdx: contextMenu.colIdx!, type: 'SK' }); setContextMenu(null); }}>🏥 Sick</div>
-          <div className="p-2.5 cursor-pointer rounded-lg text-[11px] text-slate-700 flex items-center gap-2 font-medium hover:bg-slate-100 hover:text-indigo-600" onClick={() => { setReasonModal({ row: contextMenu.row, colIdx: contextMenu.colIdx!, type: 'PR' }); setContextMenu(null); }}>📝 Permit</div>
-          <div className="p-2.5 cursor-pointer rounded-lg text-[11px] text-slate-700 flex items-center gap-2 font-medium hover:bg-slate-100 hover:text-indigo-600" onClick={() => { setReasonModal({ row: contextMenu.row, colIdx: contextMenu.colIdx!, type: 'CT' }); setContextMenu(null); }}>🏖️ Leave</div>
-          <div className="p-2.5 cursor-pointer rounded-lg text-[11px] text-slate-700 flex items-center gap-2 font-medium hover:bg-slate-100 hover:text-indigo-600" onClick={() => { setReasonModal({ row: contextMenu.row, colIdx: contextMenu.colIdx!, type: 'AL' }); setContextMenu(null); }}>❌ Absent/Alpha</div>
-          <div className="border-t border-slate-100 my-1"></div>
-          <div className="p-2.5 cursor-pointer rounded-lg text-[11px] text-slate-700 flex items-center gap-2 font-medium hover:bg-slate-100 hover:text-indigo-600 text-rose-600 font-bold" onClick={() => handleAction('REMOVE')}>♻️ Remove Activity</div>
+          {Object.entries(settings.activities || {}).map(([actKey, actConfig]: [string, any]) => {
+            if (!roleConf.allowedActivities.includes(actKey)) return null;
+            
+            return (
+              <div 
+                key={actKey}
+                className="p-2.5 cursor-pointer rounded-lg text-[11px] text-slate-700 flex items-center gap-2 font-medium hover:bg-slate-100 hover:text-indigo-600" 
+                onClick={() => {
+                  if (actConfig.duration === 'custom') {
+                    setReasonModal({ row: contextMenu.row, colIdx: contextMenu.colIdx!, type: actKey });
+                  } else {
+                    handleAction(actKey);
+                  }
+                  setContextMenu(null);
+                }}
+              >
+                <div className={`w-3 h-3 rounded-sm opacity-80 ${actConfig.color}`}></div> 
+                {actConfig.label}
+              </div>
+            );
+          })}
+          {roleConf.allowedActivities.includes('REMOVE') && (
+            <>
+              <div className="border-t border-slate-100 my-1"></div>
+              <div className="p-2.5 cursor-pointer rounded-lg text-[11px] text-slate-700 flex items-center gap-2 font-medium hover:bg-slate-100 hover:text-indigo-600 text-rose-600 font-bold" onClick={() => handleAction('REMOVE')}>♻️ Remove Activity</div>
+            </>
+          )}
         </div>
       )}
 
@@ -925,8 +984,8 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
 
       {/* Reason Modal */}
       {reasonModal && (
-        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-[20000]">
-          <div className="bg-white p-5 rounded-2xl w-[360px] max-w-[90%] flex flex-col gap-2.5 shadow-2xl">
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-[20000]">
+          <div className="bg-white p-5 rounded-2xl w-full max-w-[360px] flex flex-col gap-2.5 shadow-2xl">
             <h3 className="mt-0 text-slate-800 font-bold">Add Activity</h3>
             <div className="bg-slate-50 border border-slate-200 p-2.5 rounded-xl text-xs font-semibold text-slate-700">
               👤 Agent : <b>{reasonModal.row.nik} - {reasonModal.row.nama}</b><br/>
@@ -962,9 +1021,9 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
                 onChange={(e) => setCustomDuration(e.target.value)}
               />
             )}
-            <div className="mt-4 flex gap-2.5 justify-end">
-              <button className="px-4 py-2 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200" onClick={() => setReasonModal(null)}>Cancel</button>
-              <button className="px-4 py-2 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700" onClick={saveReasonActivity}>Save</button>
+            <div className="mt-4 flex flex-col sm:flex-row justify-end gap-2.5">
+              <button className="px-4 py-2 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 w-full sm:w-auto" onClick={() => setReasonModal(null)}>Cancel</button>
+              <button className="px-4 py-2 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 w-full sm:w-auto" onClick={saveReasonActivity}>Save</button>
             </div>
           </div>
         </div>
@@ -972,8 +1031,8 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
 
       {/* Agent Action Modal */}
       {agentModal && (
-        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-[20000]">
-          <div className="bg-white p-6 rounded-2xl w-[380px] shadow-2xl">
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-[20000]">
+          <div className="bg-white p-6 rounded-2xl w-full max-w-[380px] shadow-2xl">
             <h3 className="mt-0 text-slate-800 font-bold text-lg mb-4">
               {agentModal.type === 'ADD' ? '➕ Add New Agent' : 
                agentModal.type === 'UPDATE' ? '✏️ Update Agent' : 
@@ -1035,9 +1094,9 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
               )}
             </div>
 
-            <div className="mt-6 flex gap-2.5">
-              <button className="flex-1 py-2.5 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200" onClick={() => setAgentModal(null)}>Cancel</button>
-              <button className="flex-1 py-2.5 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700" onClick={saveAgentAction}>Save</button>
+            <div className="mt-6 flex flex-col sm:flex-row gap-2.5">
+              <button className="flex-1 py-2.5 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 w-full sm:w-auto" onClick={() => setAgentModal(null)}>Cancel</button>
+              <button className="flex-1 py-2.5 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 w-full sm:w-auto" onClick={saveAgentAction}>Save</button>
             </div>
           </div>
         </div>
@@ -1172,22 +1231,23 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
       )}
 
       {/* Legend Footer */}
-      <div className="flex items-center gap-4 px-6 py-2 bg-white border-t border-slate-200 z-[200]">
+      <div className="flex flex-wrap items-center gap-4 px-2 sm:px-6 py-2 bg-white border-t border-slate-200 z-[200]">
         <div className="flex items-center gap-1 text-[9px] text-slate-600 font-semibold"><span className="w-2.5 h-2.5 rounded-sm bg-blue-400 inline-block"></span> Online</div>
-        <div className="flex items-center gap-1 text-[9px] text-slate-600 font-semibold"><span className="w-2.5 h-2.5 rounded-sm bg-[#7ffafa] inline-block"></span> Break</div>
-        <div className="flex items-center gap-1 text-[9px] text-slate-600 font-semibold"><span className="w-2.5 h-2.5 rounded-sm bg-[#ea7efc] inline-block"></span> Meeting</div>
-        <div className="flex items-center gap-1 text-[9px] text-slate-600 font-semibold"><span className="w-2.5 h-2.5 rounded-sm bg-[#1bfa62] inline-block"></span> Sick</div>
-        <div className="flex items-center gap-1 text-[9px] text-slate-600 font-semibold"><span className="w-2.5 h-2.5 rounded-sm bg-[#36537d] inline-block"></span> Permit</div>
-        <div className="flex items-center gap-1 text-[9px] text-slate-600 font-semibold"><span className="w-2.5 h-2.5 rounded-sm bg-[#dde334] inline-block"></span> Leave</div>
-        <div className="flex items-center gap-1 text-[9px] text-slate-600 font-semibold"><span className="w-2.5 h-2.5 rounded-sm bg-[#fca5a5] inline-block"></span> Alpha</div>
-        <div className="w-px h-3 bg-slate-200 mx-0.5"></div>
+        
+        {Object.entries(settings.activities || {}).map(([key, act]: [string, any]) => (
+          <div key={key} className="flex items-center gap-1 text-[9px] text-slate-600 font-semibold">
+            <span className={`w-2.5 h-2.5 rounded-sm inline-block ${act.color}`}></span> {act.label}
+          </div>
+        ))}
+        
+        <div className="w-px h-3 bg-slate-200 mx-0.5 hidden sm:block"></div>
         <div className="flex items-center gap-1 text-[9px] text-slate-600 font-semibold"><span className="w-2.5 h-2.5 rounded-sm bg-rose-50 inline-block"></span> Under</div>
         <div className="flex items-center gap-1 text-[9px] text-slate-600 font-semibold"><span className="w-2.5 h-2.5 rounded-sm bg-green-50 inline-block"></span> Over</div>
       </div>
       {/* Custom Tooltip */}
       {tooltip && (
         <div 
-          className="fixed pointer-events-none z-[10000] bg-slate-900/90 text-white px-3 py-2 rounded-lg text-[11px] shadow-xl border border-slate-700 backdrop-blur-sm"
+          className="fixed pointer-events-none z-[20000] bg-slate-900/95 text-white px-3 py-2 rounded-lg text-[11px] shadow-2xl border border-slate-700 backdrop-blur-sm animate-in fade-in zoom-in duration-150"
           style={{ left: tooltip.x, top: tooltip.y }}
         >
           {tooltip.content}

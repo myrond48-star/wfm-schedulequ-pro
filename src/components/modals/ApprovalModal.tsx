@@ -39,8 +39,8 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({ onClose }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-[20000]">
-      <div className="bg-white p-8 rounded-3xl w-[450px] shadow-2xl">
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-[20000]">
+      <div className="bg-white p-6 sm:p-8 rounded-3xl w-full max-w-[450px] shadow-2xl">
         <h3 className="mt-0 mb-6 text-slate-800 text-xl font-bold">Pending Swap Requests</h3>
         
         <div className="max-h-[300px] overflow-y-auto pr-2 scrollbar-thin">
@@ -61,7 +61,7 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({ onClose }) => {
                 <div className="text-[11px] text-slate-500 bg-slate-50 p-2 rounded-lg mb-3 border-l-2 border-slate-300 italic">
                   "{r.reason}"
                 </div>
-                <div className="flex gap-2.5">
+                <div className="flex flex-col sm:flex-row gap-2.5">
                   <button className="flex-1 py-2.5 bg-emerald-500 text-white border-none rounded-xl cursor-pointer font-bold text-xs hover:bg-emerald-600 transition-colors" onClick={() => handleApproval(r.id, 'APPROVED')}>Approve</button>
                   <button className="flex-1 py-2.5 bg-rose-500 text-white border-none rounded-xl cursor-pointer font-bold text-xs hover:bg-rose-600 transition-colors" onClick={() => handleApproval(r.id, 'REJECT')}>Reject</button>
                 </div>

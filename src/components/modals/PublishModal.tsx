@@ -24,8 +24,8 @@ export const PublishModal: React.FC<PublishModalProps> = ({ onClose, channel, da
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-[20000]">
-      <div className="bg-white p-6 rounded-2xl w-[400px] shadow-2xl">
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-[20000]">
+      <div className="bg-white p-6 rounded-2xl w-full max-w-[400px] shadow-2xl">
         <h3 className="mt-0 text-slate-800 font-bold mb-4">📢 Publish / Unpublish Schedule</h3>
         
         <label className="text-xs font-bold text-slate-700 mb-1.5 block">Channel:</label>
@@ -33,7 +33,7 @@ export const PublishModal: React.FC<PublishModalProps> = ({ onClose, channel, da
           {settings.channels.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
 
-        <div className="flex gap-2.5 mb-3">
+        <div className="flex flex-col sm:flex-row gap-2.5 mb-3">
           <div className="flex-1">
             <label className="text-xs font-bold text-slate-700 mb-1.5 block">Start Date:</label>
             <input type="date" className="w-full p-2.5 border border-slate-300 rounded-xl outline-none focus:border-indigo-500" value={startDate} onChange={e => setStartDate(e.target.value)} />
@@ -57,10 +57,10 @@ export const PublishModal: React.FC<PublishModalProps> = ({ onClose, channel, da
           </div>
         </div>
 
-        <div className="flex justify-between gap-2.5">
-          <button className="flex-1 py-2.5 bg-slate-100 text-slate-600 border-none font-bold rounded-xl hover:bg-slate-200 transition-colors" onClick={onClose}>Cancel</button>
-          <button className="flex-1 py-2.5 bg-rose-500 text-white border-none font-bold rounded-xl hover:bg-rose-600 transition-colors" onClick={() => handleSubmit('UNPUBLISH')}>🔒 Unpublish</button>
-          <button className="flex-1 py-2.5 bg-emerald-500 text-white border-none font-bold rounded-xl hover:bg-emerald-600 transition-colors" onClick={() => handleSubmit('PUBLISH')}>📢 Publish</button>
+        <div className="flex flex-col sm:flex-row justify-between gap-2.5">
+          <button className="flex-1 py-2.5 bg-slate-100 text-slate-600 border-none font-bold rounded-xl hover:bg-slate-200 transition-colors w-full sm:w-auto" onClick={onClose}>Cancel</button>
+          <button className="flex-1 py-2.5 bg-rose-500 text-white border-none font-bold rounded-xl hover:bg-rose-600 transition-colors w-full sm:w-auto" onClick={() => handleSubmit('UNPUBLISH')}>🔒 Unpublish</button>
+          <button className="flex-1 py-2.5 bg-emerald-500 text-white border-none font-bold rounded-xl hover:bg-emerald-600 transition-colors w-full sm:w-auto" onClick={() => handleSubmit('PUBLISH')}>📢 Publish</button>
         </div>
       </div>
     </div>

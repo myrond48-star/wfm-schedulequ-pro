@@ -71,10 +71,10 @@ export const UsersDB: React.FC<UsersDBProps> = ({ search }) => {
   };
 
   return (
-    <div className="h-full flex flex-col p-6 bg-slate-50 relative">
-      <div className="flex justify-between items-center mb-6">
+    <div className="h-full flex flex-col p-4 sm:p-6 bg-slate-50 relative">
+      <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-6 gap-4">
         <h2 className="m-0 text-slate-800 font-extrabold text-2xl">👥 Users Database</h2>
-        <button className="px-4 py-2 bg-indigo-600 text-white font-bold rounded-xl shadow-md hover:bg-indigo-700 transition-colors" onClick={() => openModal(true)}>
+        <button className="px-4 py-2 bg-indigo-600 text-white font-bold rounded-xl shadow-md hover:bg-indigo-700 transition-colors w-full sm:w-auto" onClick={() => openModal(true)}>
           + Add New User
         </button>
       </div>
@@ -144,11 +144,11 @@ export const UsersDB: React.FC<UsersDBProps> = ({ search }) => {
 
       {/* User Modal */}
       {modal && (
-        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-[20000]">
-          <div className="bg-white p-6 rounded-2xl w-[500px] shadow-2xl">
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-[20000]">
+          <div className="bg-white p-6 rounded-2xl w-full max-w-[500px] shadow-2xl overflow-y-auto max-h-[90vh]">
             <h3 className="mt-0 text-slate-800 font-bold mb-4">{modal.isNew ? 'Add New User' : 'Edit User'}</h3>
             
-            <div className="flex gap-3 mb-3">
+            <div className="flex flex-col sm:flex-row gap-3 mb-3">
               <div className="flex-1">
                 <label className="text-[11px] font-bold text-slate-700 block mb-1">NIK:</label>
                 <input type="text" className="w-full p-2.5 border border-slate-300 rounded-xl outline-none focus:border-indigo-500" placeholder="e.g.: 2024091304" value={form.nik} onChange={e => setForm({...form, nik: e.target.value})} disabled={!modal.isNew} />
@@ -167,7 +167,7 @@ export const UsersDB: React.FC<UsersDBProps> = ({ search }) => {
             <label className="text-[11px] font-bold text-slate-700 block mb-1">Full Name:</label>
             <input type="text" className="w-full p-2.5 border border-slate-300 rounded-xl mb-3 outline-none focus:border-indigo-500" placeholder="Name as per ID" value={form.nama} onChange={e => setForm({...form, nama: e.target.value})} />
 
-            <div className="flex gap-3 mb-3">
+            <div className="flex flex-col sm:flex-row gap-3 mb-3">
               <div className="flex-1">
                 <label className="text-[11px] font-bold text-slate-700 block mb-1">Username (Login):</label>
                 <input type="text" className="w-full p-2.5 border border-slate-300 rounded-xl outline-none focus:border-indigo-500" placeholder="Username" value={form.username} onChange={e => setForm({...form, username: e.target.value})} />
@@ -178,7 +178,7 @@ export const UsersDB: React.FC<UsersDBProps> = ({ search }) => {
               </div>
             </div>
 
-            <div className="flex gap-3 mb-3">
+            <div className="flex flex-col sm:flex-row gap-3 mb-3">
               <div className="flex-1">
                 <label className="text-[11px] font-bold text-slate-700 block mb-1">Role:</label>
                 <select className="w-full p-2.5 border border-slate-300 rounded-xl outline-none focus:border-indigo-500" value={form.role} onChange={e => setForm({...form, role: e.target.value})}>
@@ -195,7 +195,7 @@ export const UsersDB: React.FC<UsersDBProps> = ({ search }) => {
               </div>
             </div>
 
-            <div className="flex gap-3 mb-5">
+            <div className="flex flex-col sm:flex-row gap-3 mb-5">
               <div className="flex-1">
                 <label className="text-[11px] font-bold text-slate-700 block mb-1">Religion:</label>
                 <select className="w-full p-2.5 border border-slate-300 rounded-xl outline-none focus:border-indigo-500" value={form.religion} onChange={e => setForm({...form, religion: e.target.value})}>
@@ -218,9 +218,9 @@ export const UsersDB: React.FC<UsersDBProps> = ({ search }) => {
               </div>
             </div>
 
-            <div className="flex justify-end gap-2.5">
-              <button className="px-5 py-2.5 bg-slate-100 text-slate-600 border-none font-bold rounded-xl hover:bg-slate-200 transition-colors" onClick={() => setModal(null)}>Cancel</button>
-              <button className="px-5 py-2.5 bg-indigo-600 text-white border-none font-bold rounded-xl hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200" onClick={saveUser}>💾 Save User</button>
+            <div className="flex flex-col sm:flex-row justify-end gap-2.5">
+              <button className="px-5 py-2.5 bg-slate-100 text-slate-600 border-none font-bold rounded-xl hover:bg-slate-200 transition-colors w-full sm:w-auto" onClick={() => setModal(null)}>Cancel</button>
+              <button className="px-5 py-2.5 bg-indigo-600 text-white border-none font-bold rounded-xl hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200 w-full sm:w-auto" onClick={saveUser}>💾 Save User</button>
             </div>
           </div>
         </div>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useAppStore } from '../lib/store';
 import { IntervalView } from './IntervalView';
 import { CalendarView } from './CalendarView';
@@ -86,58 +86,117 @@ export const Dashboard: React.FC = () => {
     fetchLeaders();
   }, []);
 
+  const [showViewDropdown, setShowViewDropdown] = useState(false);
+  const [showActionsDropdown, setShowActionsDropdown] = useState(false);
+  const [showNotifDropdown, setShowNotifDropdown] = useState(false);
+
+  // Hover refs to prevent flickering
+  const viewTimeout = useRef<any>(null);
+  const actionTimeout = useRef<any>(null);
+  const notifTimeout = useRef<any>(null);
+
+  const handleHover = (type: 'view' | 'action' | 'notif', enter: boolean) => {
+    if (window.innerWidth < 1024) return; 
+
+    if (enter) {
+      if (type === 'view') {
+        if (viewTimeout.current) clearTimeout(viewTimeout.current);
+        setShowViewDropdown(true);
+        setShowActionsDropdown(false);
+        setShowNotifDropdown(false);
+      } else if (type === 'action') {
+        if (actionTimeout.current) clearTimeout(actionTimeout.current);
+        setShowActionsDropdown(true);
+        setShowViewDropdown(false);
+        setShowNotifDropdown(false);
+      } else if (type === 'notif') {
+        if (notifTimeout.current) clearTimeout(notifTimeout.current);
+        setShowNotifDropdown(true);
+        setShowViewDropdown(false);
+        setShowActionsDropdown(false);
+      }
+    } else {
+      if (type === 'view') {
+        viewTimeout.current = setTimeout(() => setShowViewDropdown(false), 200);
+      } else if (type === 'action') {
+        actionTimeout.current = setTimeout(() => setShowActionsDropdown(false), 200);
+      } else if (type === 'notif') {
+        notifTimeout.current = setTimeout(() => setShowNotifDropdown(false), 200);
+      }
+    }
+  };
+
   return (
-    <div className="flex flex-col h-screen bg-[#6755f2] p-4 box-border overflow-hidden font-sans">
+    <div className="flex flex-col h-screen bg-[#6755f2] p-2 sm:p-4 box-border overflow-hidden font-sans">
       {/* Toolbar */}
-      <div className="flex flex-wrap gap-1.5 mb-2 items-center bg-white p-2 px-3 rounded-2xl shadow-md overflow-visible relative z-[9999]">
+      <div className="flex flex-col sm:flex-row flex-wrap gap-2 mb-2 bg-white p-2 sm:px-3 rounded-2xl shadow-md relative z-[10000]">
         
+        {/* Navigation Wrapper (Scrollable row on mobile) */}
+        <div className="flex overflow-x-auto sm:overflow-visible pb-1 sm:pb-0 gap-1.5 flex-1 items-center scrollbar-thin">
         {/* View Dropdown */}
-        <div className="relative group flex-shrink-0">
-          <button className="px-3.5 py-2 rounded-xl cursor-pointer text-xs font-semibold border border-slate-200 bg-indigo-600 text-white hover:bg-indigo-700 transition-all flex items-center gap-1.5 min-w-[100px] justify-between">
+        <div 
+          className="relative flex-shrink-0"
+          onMouseEnter={() => handleHover('view', true)}
+          onMouseLeave={() => handleHover('view', false)}
+        >
+          <button 
+            onClick={() => {
+              setShowViewDropdown(!showViewDropdown);
+              setShowActionsDropdown(false);
+              setShowNotifDropdown(false);
+            }}
+            className="px-3.5 py-2 rounded-xl cursor-pointer text-xs font-semibold border border-slate-200 bg-indigo-600 text-white hover:bg-indigo-700 transition-all flex items-center gap-1.5 min-w-[100px] justify-between"
+          >
             <div className="flex items-center gap-1.5">
               <Eye size={14} />
               <span>View</span>
             </div>
-            <ChevronDown size={12} />
+            <ChevronDown size={12} className={`transition-transform ${showViewDropdown ? 'rotate-180' : ''}`} />
           </button>
-          <div className="absolute hidden group-hover:flex flex-col gap-1 bg-white min-w-[170px] shadow-xl rounded-xl z-[1000] p-2 top-full mt-1 left-0 border border-slate-200 before:content-[''] before:absolute before:-top-2 before:left-0 before:right-0 before:h-2">
-            {(masterKey || ui.includes('viewInt')) && (
-              <button onClick={() => setCurrentView('interval')} className={`p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 ${currentView === 'interval' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>
-                <Clock size={14} />
-                Interval
-              </button>
-            )}
-            {(masterKey || ui.includes('viewCal')) && (
-              <button onClick={() => setCurrentView('calendar')} className={`p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 ${currentView === 'calendar' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>
-                <Calendar size={14} />
-                Calendar
-              </button>
-            )}
-            {(masterKey || ui.includes('viewAdh')) && (
-              <button onClick={() => setCurrentView('adherence')} className={`p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 ${currentView === 'adherence' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>
-                <BarChart3 size={14} />
-                Adherence
-              </button>
-            )}
-            {(masterKey || ui.includes('viewFor')) && (
-              <button onClick={() => setCurrentView('forecast')} className={`p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 ${currentView === 'forecast' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>
-                <LineChart size={14} />
-                Forecast
-              </button>
-            )}
-            {masterKey && (
-              <button onClick={() => setCurrentView('users')} className={`p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 ${currentView === 'users' ? 'text-emerald-600 bg-emerald-50' : 'text-slate-600'}`}>
-                <Users size={14} />
-                Users DB
-              </button>
-            )}
-            {(masterKey || ui.includes('btnSys')) && (
-              <button onClick={() => setCurrentView('settings')} className={`p-2.5 border-none bg-transparent cursor-pointer text-xs font-bold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 ${currentView === 'settings' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>
-                <SettingsIcon size={14} />
-                System Settings
-              </button>
-            )}
-          </div>
+          
+          {showViewDropdown && (
+            <>
+              <div className="lg:hidden fixed inset-0 z-[999]" onClick={() => setShowViewDropdown(false)}></div>
+              <div className="absolute flex flex-col gap-1 bg-white min-w-[170px] shadow-xl rounded-xl z-[1001] p-2 top-full mt-1 left-0 border border-slate-200">
+                {(masterKey || ui.includes('viewInt')) && (
+                  <button onClick={() => { setCurrentView('interval'); setShowViewDropdown(false); }} className={`p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 ${currentView === 'interval' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>
+                    <Clock size={14} />
+                    Interval
+                  </button>
+                )}
+                {(masterKey || ui.includes('viewCal')) && (
+                  <button onClick={() => { setCurrentView('calendar'); setShowViewDropdown(false); }} className={`p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 ${currentView === 'calendar' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>
+                    <Calendar size={14} />
+                    Calendar
+                  </button>
+                )}
+                {(masterKey || ui.includes('viewAdh')) && (
+                  <button onClick={() => { setCurrentView('adherence'); setShowViewDropdown(false); }} className={`p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 ${currentView === 'adherence' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>
+                    <BarChart3 size={14} />
+                    Adherence
+                  </button>
+                )}
+                {(masterKey || ui.includes('viewFor')) && (
+                  <button onClick={() => { setCurrentView('forecast'); setShowViewDropdown(false); }} className={`p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 ${currentView === 'forecast' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>
+                    <LineChart size={14} />
+                    Forecast
+                  </button>
+                )}
+                {masterKey && (
+                  <button onClick={() => { setCurrentView('users'); setShowViewDropdown(false); }} className={`p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 ${currentView === 'users' ? 'text-emerald-600 bg-emerald-50' : 'text-slate-600'}`}>
+                    <Users size={14} />
+                    Users DB
+                  </button>
+                )}
+                {(masterKey || ui.includes('btnSys')) && (
+                  <button onClick={() => { setCurrentView('settings'); setShowViewDropdown(false); }} className={`p-2.5 border-none bg-transparent cursor-pointer text-xs font-bold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 ${currentView === 'settings' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`}>
+                    <SettingsIcon size={14} />
+                    System Settings
+                  </button>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         {/* Channel Dropdown */}
@@ -145,7 +204,7 @@ export const Dashboard: React.FC = () => {
           <select 
             value={channel} 
             onChange={(e) => setChannel(e.target.value)}
-            className="px-3.5 py-2 rounded-xl cursor-pointer text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-50 transition-all flex-shrink-0 outline-none"
+            className="px-3.5 py-2 rounded-xl cursor-pointer text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-50 transition-all flex-shrink-0 outline-none max-w-[120px]"
           >
             {settings.channels.map(ch => (
               <option key={ch} value={ch}>{ch}</option>
@@ -205,100 +264,143 @@ export const Dashboard: React.FC = () => {
 
         {/* Date Range Picker for Calendar */}
         {currentView === 'calendar' && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-shrink-0">
             <input 
               type="date" 
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
-              className="px-3.5 py-2 rounded-xl cursor-pointer text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-50 transition-all flex-shrink-0 outline-none"
+              className="px-3.5 py-2 rounded-xl cursor-pointer text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-50 transition-all flex-shrink-0 outline-none min-w-[110px]"
             />
             <span className="text-xs font-bold text-slate-500">to</span>
             <input 
               type="date" 
               value={endDate}
               onChange={(e) => setEndDate(e.target.value)}
-              className="px-3.5 py-2 rounded-xl cursor-pointer text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-50 transition-all flex-shrink-0 outline-none"
+              className="px-3.5 py-2 rounded-xl cursor-pointer text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-50 transition-all flex-shrink-0 outline-none min-w-[110px]"
             />
           </div>
         )}
 
-        {/* Actions Dropdown */}
-        {currentView !== 'users' && currentView !== 'forecast' && currentView !== 'settings' && (
-          <div className="relative group flex-shrink-0">
-            <button className="px-3.5 py-2 rounded-xl cursor-pointer text-xs font-semibold border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-all flex items-center gap-1.5 min-w-[100px] justify-between">
+        {(masterKey || ui.includes('btnAct')) && currentView !== 'users' && currentView !== 'forecast' && currentView !== 'settings' && (
+          <div 
+            className="relative flex-shrink-0"
+            onMouseEnter={() => handleHover('action', true)}
+            onMouseLeave={() => handleHover('action', false)}
+          >
+            <button 
+              onClick={() => {
+                setShowActionsDropdown(!showActionsDropdown);
+                setShowViewDropdown(false);
+                setShowNotifDropdown(false);
+              }}
+              className="px-3.5 py-2 rounded-xl cursor-pointer text-xs font-semibold border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-all flex items-center gap-1.5 min-w-[100px] justify-between"
+            >
               <div className="flex items-center gap-1.5">
                 <Zap size={14} className="text-amber-500" />
                 <span>Actions</span>
               </div>
-              <ChevronDown size={12} />
+              <ChevronDown size={12} className={`transition-transform ${showActionsDropdown ? 'rotate-180' : ''}`} />
             </button>
-            <div className="absolute hidden group-hover:flex flex-col gap-1 bg-white min-w-[170px] shadow-xl rounded-xl z-[1000] p-2 top-full mt-1 left-0 border border-slate-200 before:content-[''] before:absolute before:-top-2 before:left-0 before:right-0 before:h-2">
-              <button 
-                onClick={() => setRefreshKey(prev => prev + 1)}
-                className="p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 text-slate-600"
-              >
-                <RefreshCw size={14} />
-                Refresh Data
-              </button>
-              <button onClick={() => setShowSwap(true)} className="p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 text-indigo-600">
-                <ArrowLeftRight size={14} />
-                Swap Shift
-              </button>
-              {(masterKey || ui.includes('btnApp')) && (
-                <button onClick={() => setShowApproval(true)} className="p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 text-amber-600">
-                  <FileText size={14} />
-                  Approvals
-                </button>
-              )}
-              {(masterKey || ui.includes('btnPub')) && (
-                <button onClick={() => setShowPublish(true)} className="p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 text-orange-600">
-                  <Send size={14} />
-                  Publish Schedule
-                </button>
-              )}
-              <button onClick={() => setShowReportAdh(true)} className="p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 text-sky-600">
-                <BarChart3 size={14} />
-                Export Adherence
-              </button>
-              <button className="p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 text-emerald-600">
-                <FileSpreadsheet size={14} />
-                Export Excel
-              </button>
-              {(masterKey || ui.includes('btnBrk')) && currentView === 'interval' && (
-                <button 
-                  onClick={() => window.dispatchEvent(new CustomEvent('wfm-trigger-breakmanager'))} 
-                  className="p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 text-indigo-600 font-bold"
-                >
-                  <Utensils size={14} />
-                  Manage Breaks
-                </button>
-              )}
-              <button className="p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 text-rose-600">
-                <Printer size={14} />
-                Print/Save PDF
-              </button>
-            </div>
+            
+            {showActionsDropdown && (
+              <>
+                <div className="lg:hidden fixed inset-0 z-[999]" onClick={() => setShowActionsDropdown(false)}></div>
+                <div className="absolute flex flex-col bg-white w-[200px] shadow-xl rounded-xl z-[1001] top-full mt-1 right-0 sm:right-auto border border-slate-200 p-2">
+                  <button 
+                    onClick={() => { setRefreshKey(prev => prev + 1); setShowActionsDropdown(false); }}
+                    className="p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 text-slate-600"
+                  >
+                    <RefreshCw size={14} />
+                    Refresh Data
+                  </button>
+                  <button onClick={() => { setShowSwap(true); setShowActionsDropdown(false); }} className="p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 text-indigo-600">
+                    <ArrowLeftRight size={14} />
+                    Swap Shift
+                  </button>
+                  {(masterKey || ui.includes('btnApp')) && (
+                    <button onClick={() => { setShowApproval(true); setShowActionsDropdown(false); }} className="p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 text-amber-600">
+                      <FileText size={14} />
+                      Approvals
+                    </button>
+                  )}
+                  {(masterKey || ui.includes('btnPub')) && (
+                    <button onClick={() => { setShowPublish(true); setShowActionsDropdown(false); }} className="p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 text-orange-600">
+                      <Send size={14} />
+                      Publish Schedule
+                    </button>
+                  )}
+                  <button onClick={() => { setShowReportAdh(true); setShowActionsDropdown(false); }} className="p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 text-sky-600">
+                    <BarChart3 size={14} />
+                    Export Adherence
+                  </button>
+                  <button 
+                    onClick={() => setShowActionsDropdown(false)}
+                    className="p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 text-emerald-600"
+                  >
+                    <FileSpreadsheet size={14} />
+                    Export Excel
+                  </button>
+                  {(masterKey || ui.includes('btnBrk')) && currentView === 'interval' && (
+                    <button 
+                      onClick={() => {
+                        window.dispatchEvent(new CustomEvent('wfm-trigger-breakmanager'));
+                        setShowActionsDropdown(false);
+                      }} 
+                      className="p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 text-indigo-600 font-bold"
+                    >
+                      <Utensils size={14} />
+                      Manage Breaks
+                    </button>
+                  )}
+                  <button 
+                    onClick={() => setShowActionsDropdown(false)}
+                    className="p-2.5 border-none bg-transparent cursor-pointer text-xs font-semibold text-left rounded-lg flex items-center gap-2 transition-all hover:bg-slate-50 hover:pl-4 text-rose-600"
+                  >
+                    <Printer size={14} />
+                    Print/Save PDF
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
+        </div>
 
         {/* Right side user info */}
-        <div className="flex items-center gap-4 ml-auto flex-shrink-0">
+        <div className="flex items-center gap-2 sm:gap-4 sm:ml-auto w-full sm:w-auto justify-between sm:justify-start border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-100 mt-1 sm:mt-0">
           {/* Notifications */}
-          <div className="relative group">
-            <button className="p-1 border-none bg-transparent cursor-pointer text-lg relative">
+          <div 
+            className="relative"
+            onMouseEnter={() => handleHover('notif', true)}
+            onMouseLeave={() => handleHover('notif', false)}
+          >
+            <button 
+              onClick={() => {
+                setShowNotifDropdown(!showNotifDropdown);
+                setShowViewDropdown(false);
+                setShowActionsDropdown(false);
+              }}
+              className="p-1 border-none bg-transparent cursor-pointer text-lg relative"
+            >
               🔔
               <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full border-2 border-white">
                 0
               </span>
             </button>
-            <div className="absolute hidden group-hover:flex flex-col bg-white w-[280px] shadow-xl rounded-xl z-[1000] top-[calc(100%+5px)] right-0 border border-slate-200 overflow-hidden">
-              <div className="p-3 font-bold border-b border-slate-200 bg-slate-50 text-xs text-slate-800">
-                📬 Swap Notifications
-              </div>
-              <div className="p-3 text-xs text-slate-500 text-center">
-                No swap requests yet.
-              </div>
-            </div>
+            
+            {showNotifDropdown && (
+              <>
+                <div className="lg:hidden fixed inset-0 z-[999]" onClick={() => setShowNotifDropdown(false)}></div>
+                <div className="absolute flex flex-col bg-white w-[280px] shadow-xl rounded-xl z-[1001] top-[calc(100%+5px)] right-0 border border-slate-200 overflow-hidden">
+                  <div className="p-3 font-bold border-b border-slate-200 bg-slate-50 text-xs text-slate-800">
+                    📬 Swap Notifications
+                  </div>
+                  <div className="p-3 text-xs text-slate-500 text-center">
+                    No swap requests yet.
+                  </div>
+                </div>
+              </>
+            )}
           </div>
 
           <div className="text-[11px] font-bold text-slate-600 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">

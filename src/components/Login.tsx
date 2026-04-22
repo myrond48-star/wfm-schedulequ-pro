@@ -164,8 +164,8 @@ export const Login: React.FC = () => {
   }
 
   return (
-    <div className="fixed inset-0 bg-[#6755f2] flex items-center justify-center z-[10000]">
-      <div className="bg-white p-10 rounded-3xl w-[340px] shadow-2xl text-center">
+    <div className="fixed inset-0 bg-[#6755f2] flex items-center justify-center p-4 z-[10000]">
+      <div className="bg-white p-8 sm:p-10 rounded-3xl w-full max-w-[340px] shadow-2xl text-center">
         <div className="flex justify-center mb-8">
           <Logo centered />
         </div>

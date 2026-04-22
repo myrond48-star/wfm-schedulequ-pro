@@ -59,8 +59,8 @@ export const SwapModal: React.FC<SwapModalProps> = ({ onClose, channel, date }) 
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-[20000]">
-      <div className="bg-white p-6 rounded-2xl w-[480px] shadow-2xl">
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-[20000]">
+      <div className="bg-white p-6 rounded-2xl w-full max-w-[480px] shadow-2xl overflow-y-auto max-h-[90vh]">
         <div className="text-center mb-5">
           <h3 className="m-0 text-slate-800 text-xl font-bold">🔄 Shift Swap Request</h3>
           <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed px-5">Please ensure you have received approval from your TL & OM before submitting.</p>
@@ -91,7 +91,7 @@ export const SwapModal: React.FC<SwapModalProps> = ({ onClose, channel, date }) 
             </select>
           </div>
 
-          <div className="flex gap-4">
+          <div className="flex flex-col sm:flex-row gap-4">
             <div className="flex-1">
               <label className="block text-[13px] font-semibold text-slate-700 mb-1.5">Your Date</label>
               <input type="date" className="w-full p-3 border border-slate-300 rounded-xl outline-none focus:border-indigo-500" value={date1} onChange={e => setDate1(e.target.value)} />
@@ -110,7 +110,7 @@ export const SwapModal: React.FC<SwapModalProps> = ({ onClose, channel, date }) 
           </div>
         </div>
 
-        <div className="flex gap-3 mt-8">
+        <div className="flex flex-col sm:flex-row gap-3 mt-8">
           <button className="flex-1 py-3 border border-slate-200 rounded-xl bg-slate-50 text-slate-600 font-semibold hover:bg-slate-100" onClick={onClose}>Close</button>
           <button className="flex-[2] py-3 border-none rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200" onClick={handleSubmit} disabled={loading}>
             {loading ? 'Processing...' : 'Submit Request'}

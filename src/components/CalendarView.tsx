@@ -192,9 +192,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ channel, startDate, 
   return (
     <div className="h-full flex flex-col relative">
       {/* View Header/Toolbar */}
-      <div className="flex items-center justify-between p-4 bg-white border-b border-slate-200">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-white border-b border-slate-200 gap-3">
         <div className="flex items-center gap-3">
-          <div className="p-2 bg-indigo-50 rounded-xl text-indigo-600">
+          <div className="p-2 bg-indigo-50 rounded-xl text-indigo-600 flex-shrink-0">
             <Calendar size={18} />
           </div>
           <div>
@@ -204,17 +204,17 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ channel, startDate, 
         </div>
 
         {canEdit && (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
             <button 
               onClick={() => setShowImport(true)} 
-              className="px-4 py-2 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-xl text-xs font-bold cursor-pointer hover:bg-indigo-100 transition-all flex items-center gap-2"
+              className="flex-1 sm:flex-none justify-center px-4 py-2 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-xl text-xs font-bold cursor-pointer hover:bg-indigo-100 transition-all flex items-center gap-2 whitespace-nowrap"
             >
               <FileUp size={14} />
               Import Schedule
             </button>
             <button 
               onClick={() => setShowDeleteRange(true)} 
-              className="px-4 py-2 bg-rose-50 text-rose-600 border border-rose-100 rounded-xl text-xs font-bold cursor-pointer hover:bg-rose-100 transition-all flex items-center gap-2"
+              className="flex-1 sm:flex-none justify-center px-4 py-2 bg-rose-50 text-rose-600 border border-rose-100 rounded-xl text-xs font-bold cursor-pointer hover:bg-rose-100 transition-all flex items-center gap-2 whitespace-nowrap"
             >
               <Trash2 size={14} />
               Delete Range

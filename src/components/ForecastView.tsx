@@ -85,6 +85,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
   const [histIntervalSize, setHistIntervalSize] = useState<15 | 30 | 60>(60);
   const [historicalIntervals, setHistoricalIntervals] = useState<any[]>([]);
   const [forecastIntervals, setForecastIntervals] = useState<any[]>([]);
+  const [historicalSchedules, setHistoricalSchedules] = useState<any[]>([]);
   const [histLoading, setHistLoading] = useState(false);
   const [showDeleteForecastModal, setShowDeleteForecastModal] = useState(false);
   const [deleteForecastRange, setDeleteForecastRange] = useState({ start: "", end: "", type: "monthly" as "monthly" | "interval" });
@@ -398,7 +399,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
       const start = `${histStartDate}T00:00:00Z`;
       const end = `${histEndDate}T23:59:59Z`;
 
-      const [actualRes, forecastRes] = await Promise.all([
+      const [actualRes, forecastRes, scheduleRes] = await Promise.all([
         callSupabaseAPI(
           "wfm_traffic_actual",
           "GET",
@@ -411,10 +412,17 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
           undefined,
           `?channel=eq.${channel}&timestamp=gte.${start}&timestamp=lte.${end}&type=in.(interval,interval_agents)&select=timestamp,volume,type&order=timestamp.desc`,
         ),
+        callSupabaseAPI(
+          "wfm_schedules",
+          "GET",
+          undefined,
+          `?channel=eq.${channel}&date=gte.${histStartDate}&date=lte.${histEndDate}&select=*`,
+        ),
       ]);
       
       setHistoricalIntervals(actualRes || []);
       setForecastIntervals(forecastRes || []);
+      setHistoricalSchedules(scheduleRes || []);
     } catch (err) {
       console.error("Error fetching historical data:", err);
     } finally {
@@ -447,6 +455,13 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
       const dateStr = formatInUTC(new Date(item.timestamp), "yyyy-MM-dd");
       if (!groupedForecast[dateStr]) groupedForecast[dateStr] = [];
       groupedForecast[dateStr].push(item);
+    });
+
+    const groupedSchedules: Record<string, any[]> = {};
+    historicalSchedules.forEach((item) => {
+      const dateStr = item.date;
+      if (!groupedSchedules[dateStr]) groupedSchedules[dateStr] = [];
+      groupedSchedules[dateStr].push(item);
     });
 
     return Array.from(allDates)
@@ -494,27 +509,65 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
           }
         });
 
+        // Calculate Agent Actual from schedules
+        const daySchedules = groupedSchedules[date] || [];
+        const intervalCountsArr = Array(96).fill(0);
+        
+        daySchedules.forEach(row => {
+          const processShift = (sIdx: number, eIdx: number, acts: any) => {
+            for (let i = 0; i < 96; i++) {
+              const isWithin = sIdx <= i && i < eIdx;
+              if (acts?.[i] === '1' || (isWithin && (acts?.[i] === undefined || acts?.[i] === null))) {
+                intervalCountsArr[i]++;
+              }
+            }
+          };
+
+          // Handle S4 Prev (Overnight shift from yesterday covering 00:00 - 07:00)
+          if (row.shift_prev === 'S4') {
+            processShift(0, 28, row.activities);
+          }
+
+          // Handle Regular Shift
+          const shiftInfo = settings.shifts?.[row.shift];
+          if (shiftInfo) {
+            const parseTime = (t: string) => {
+              const [h, m] = t.split(':').map(Number);
+              return h * 4 + Math.floor(m / 15);
+            };
+            let startIdx = parseTime(shiftInfo.s);
+            let endIdx = parseTime(shiftInfo.e);
+            if (endIdx <= startIdx) endIdx += 96;
+            processShift(startIdx, endIdx, row.activities);
+          }
+        });
+
         // Post-process bins to calculate Agent Requirement
         Object.keys(bins).forEach(timeKey => {
           const b = bins[timeKey];
-          const binAht = b.ahtCount > 0 ? Math.round(b.totalAht / b.ahtCount) : Number(displayedParams.aht) || 300;
-          
-          let req = null;
           const dbReqs = (b as any).dbAgentReqs;
           
+          let req = null;
           if (dbReqs && dbReqs.length > 0) {
-            // If we have stored requirements, we take the average/max for the bin.
-            // Usually, if multiple small intervals are merged into a larger bin, 
-            // the headcount needed for the larger bin is the average headcounts of the sub-intervals (if they were constant over their sub-intervals).
-            // Example: 10 agents for 15m, 20 agents for next 15m. For 30m, you need 15 agents worth of work.
             req = Math.ceil(dbReqs.reduce((sum: number, r: number) => sum + r, 0) / dbReqs.length);
           }
           (b as any).agentNeed = req;
+
+          // Process agentActual
+          const [h, m] = timeKey.split(':').map(Number);
+          const binStartIdx = h * 4 + Math.floor(m / 15);
+          const numSubSlots = histIntervalSize / 15;
+          let subSum = 0;
+          for(let k = 0; k < numSubSlots; k++) {
+            subSum += intervalCountsArr[(binStartIdx + k) % 96];
+          }
+          (b as any).agentActual = Math.ceil(subSum / numSubSlots);
         });
 
         const totalVolume = Object.values(bins).reduce((sum, b) => sum + b.volume, 0);
         const totalForecast = Object.values(bins).reduce((sum, b) => sum + b.forecast, 0);
         const totalAgentHours = Object.values(bins).reduce((sum, b: any) => sum + ((b.agentNeed || 0) * (histIntervalSize / 60)), 0);
+        const totalActualHours = Object.values(bins).reduce((sum, b: any) => sum + ((b.agentActual || 0) * (histIntervalSize / 60)), 0);
         const holidayName = settings.holidays[date];
 
         return {
@@ -522,12 +575,13 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
           totalVolume,
           totalForecast,
           totalAgentHours,
+          totalActualHours,
           bins,
           isHoliday: !!holidayName,
           holidayName,
         };
       });
-  }, [historicalIntervals, forecastIntervals, histIntervalSize, settings.holidays, displayedParams]);
+  }, [historicalIntervals, forecastIntervals, historicalSchedules, histIntervalSize, settings.holidays, displayedParams, settings.shifts]);
 
   const intervalTotals = useMemo(() => {
     const f = intervalData.reduce((acc, curr) => acc + (curr.forecast || 0), 0);
@@ -2434,31 +2488,31 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
   return (
     <div className="h-full flex flex-col bg-slate-50 overflow-hidden">
       {/* Header Tabs */}
-      <div className="flex items-center gap-1 p-4 bg-white border-b border-slate-200">
+      <div className="flex overflow-x-auto items-center gap-1 p-2 sm:p-4 bg-white border-b border-slate-200 scrollbar-thin flex-shrink-0">
         <button
           onClick={() => setActiveTab("monthly")}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${activeTab === "monthly" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100" : "text-slate-500 hover:bg-slate-100"}`}
+          className={`whitespace-nowrap px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${activeTab === "monthly" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100" : "text-slate-500 hover:bg-slate-100"}`}
         >
           <Calendar size={14} />
           Monthly Forecast
         </button>
         <button
           onClick={() => setActiveTab("interval")}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${activeTab === "interval" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100" : "text-slate-500 hover:bg-slate-100"}`}
+          className={`whitespace-nowrap px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${activeTab === "interval" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100" : "text-slate-500 hover:bg-slate-100"}`}
         >
           <Clock size={14} />
           Interval Forecast
         </button>
         <button
           onClick={() => setActiveTab("forecast_gen")}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${activeTab === "forecast_gen" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100" : "text-slate-500 hover:bg-slate-100"}`}
+          className={`whitespace-nowrap px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${activeTab === "forecast_gen" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100" : "text-slate-500 hover:bg-slate-100"}`}
         >
           <BrainCircuit size={14} />
           Forecast Generation
         </button>
         <button
           onClick={() => setActiveTab("historical")}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${activeTab === "historical" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100" : "text-slate-500 hover:bg-slate-100"}`}
+          className={`whitespace-nowrap px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${activeTab === "historical" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100" : "text-slate-500 hover:bg-slate-100"}`}
         >
           <TableIcon size={14} />
           Historical Data
@@ -5377,6 +5431,95 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                             ${agentNeed !== null && agentNeed > 0 ? "text-indigo-700" : "text-slate-200"}`}
                                         >
                                           {agentNeed !== null && agentNeed > 0 ? agentNeed : "-"}
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                );
+                              });
+                            })()}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* AGENT ACTUAL TABLE */}
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                       <Users size={14} className="text-emerald-600" />
+                       <h4 className="text-[10px] font-black text-slate-700 uppercase tracking-widest">
+                         6. Agent Actual (Scheduled)
+                       </h4>
+                    </div>
+                    <div className="overflow-hidden rounded-2xl border border-slate-100 shadow-sm bg-white">
+                      <div className="overflow-auto max-h-[500px] scrollbar-thin">
+                        <table className="w-full text-left border-collapse table-fixed min-w-[max-content]">
+                          <thead className="sticky top-0 z-30">
+                            <tr className="bg-slate-50 border-b border-slate-200">
+                              <th className="p-1 px-2 text-[8px] font-black text-slate-500 uppercase tracking-widest sticky left-0 bg-slate-50 z-40 w-16 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
+                                Intrvl
+                              </th>
+                              {processedHistorical.map((row, idx) => {
+                                const dayNum = new Date(row.date).getUTCDay();
+                                const isWeekEnd = dayNum === 0 || dayNum === 6;
+                                return (
+                                  <th
+                                    key={idx}
+                                    className={`p-1 text-[8px] font-black uppercase tracking-widest text-center border-l border-slate-100 w-16 
+                                      ${row.isHoliday ? "text-rose-500 bg-rose-50" : isWeekEnd ? "bg-slate-100 text-slate-500" : "text-slate-400 bg-slate-50"}`}
+                                  >
+                                    <div className="flex flex-col scale-[0.85] leading-tight">
+                                      <span className="opacity-60 font-medium">{formatInUTC(new Date(row.date), "EEE")}</span>
+                                      <span className="font-extrabold">{formatInUTC(new Date(row.date), "dd MMM")}</span>
+                                    </div>
+                                  </th>
+                                );
+                              })}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-50">
+                            {/* Summary Actual agents count */}
+                            <tr className="bg-emerald-50/70 font-black text-emerald-700 border-b-2 border-slate-200">
+                              <td className="p-1 px-2 text-[8px] uppercase sticky left-0 bg-emerald-50 z-10 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
+                                AGENTS
+                              </td>
+                              {processedHistorical.map((row, idx) => {
+                                const dayNum = new Date(row.date).getUTCDay();
+                                const isWeekEnd = dayNum === 0 || dayNum === 6;
+                                const fteActual = Math.ceil((row as any).totalActualHours / 9);
+                                
+                                return (
+                                  <td key={idx} className={`p-1 text-center text-[9px] border-l border-emerald-100/30 ${row.isHoliday ? "bg-rose-50/50" : isWeekEnd ? "bg-slate-100/50" : ""}`}>
+                                    {fteActual > 0 ? fteActual : "-"}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                            {(() => {
+                              const numSlots = (24 * 60) / histIntervalSize;
+                              return Array.from({ length: numSlots }).map((_, i) => {
+                                const h = Math.floor((i * histIntervalSize) / 60);
+                                const m = (i * histIntervalSize) % 60;
+                                const timeStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+                                return (
+                                  <tr key={i} className="hover:bg-slate-50/50 transition-colors group">
+                                    <td className="p-1 px-2 text-[9px] font-black text-slate-400 sticky left-0 bg-white z-10 shadow-[1px_0_3px_rgba(0,0,0,0.05)] border-r border-slate-100 group-hover:text-emerald-600">
+                                      {timeStr}
+                                    </td>
+                                    {processedHistorical.map((dateRow, dIdx) => {
+                                      const bin = dateRow.bins[timeStr];
+                                      const dayNum = new Date(dateRow.date).getUTCDay();
+                                      const isWeekEnd = dayNum === 0 || dayNum === 6;
+                                      const agentActual = bin ? (bin as any).agentActual : 0;
+                                      return (
+                                        <td 
+                                          key={dIdx} 
+                                          className={`p-1 text-center text-[9px] border-l border-slate-50 font-bold tracking-tighter
+                                            ${dateRow.isHoliday ? "bg-rose-50/30" : isWeekEnd ? "bg-slate-50/80" : ""}
+                                            ${agentActual > 0 ? "text-emerald-700" : "text-slate-200"}`}
+                                        >
+                                          {agentActual > 0 ? agentActual : "-"}
                                         </td>
                                       );
                                     })}

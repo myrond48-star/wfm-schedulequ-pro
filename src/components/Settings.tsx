@@ -115,6 +115,9 @@ export const Settings: React.FC = () => {
   // Roles State
   const [roles, setRoles] = useState(settings.roles);
 
+  // Activities State
+  const [activities, setActivities] = useState(settings.activities || {});
+
   // Business Rules State
   const [bizRules, setBizRules] = useState(settings.bizRules);
 
@@ -166,6 +169,11 @@ export const Settings: React.FC = () => {
   const handleSaveRoles = () => {
     updateSettings({ roles });
     showStatus("Roles Settings saved successfully! ✅");
+  };
+
+  const handleSaveActivities = () => {
+    updateSettings({ activities });
+    showStatus("Activity Settings saved successfully! ✅");
   };
 
   const handleSaveHolidays = () => {
@@ -328,6 +336,12 @@ export const Settings: React.FC = () => {
                 Save Business Rules
               </button>
             )}
+            {activeTab === 'activities' && (
+              <button onClick={handleSaveActivities} className="px-5 py-2 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 shadow-lg shadow-indigo-100 transition-all flex items-center gap-2 text-xs">
+                <Save size={16} />
+                Save Activities
+              </button>
+            )}
           </div>
         </div>
 
@@ -338,7 +352,7 @@ export const Settings: React.FC = () => {
         )}
 
         <div className="bg-white rounded-3xl border border-slate-200 shadow-sm relative">
-          <div className="flex border-b border-slate-200 bg-slate-50/50 p-1.5 gap-1.5 overflow-x-auto scrollbar-none rounded-t-3xl">
+          <div className="flex border-b border-slate-200 bg-slate-50/50 p-1.5 gap-1.5 overflow-x-auto scrollbar-none rounded-t-3xl items-center sticky top-0 z-10">
             <button className={`flex-1 py-3 px-4 font-bold text-xs rounded-2xl transition-all whitespace-nowrap flex items-center justify-center gap-2 ${activeTab === 'api' ? 'bg-indigo-50 text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-indigo-500'}`} onClick={() => setActiveTab('api')}>
               <Database size={16} />
               API Database
@@ -367,9 +381,13 @@ export const Settings: React.FC = () => {
               <Briefcase size={16} />
               Business Rules
             </button>
+            <button className={`flex-1 py-3 px-4 font-bold text-xs rounded-2xl transition-all whitespace-nowrap flex items-center justify-center gap-2 ${activeTab === 'activities' ? 'bg-indigo-50 text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-indigo-500'}`} onClick={() => setActiveTab('activities')}>
+              <Zap size={16} />
+              Activities
+            </button>
           </div>
 
-          <div className="p-8">
+          <div className="p-4 sm:p-8">
             {activeTab === 'biz' && (
               <div className="animate-in fade-in slide-in-from-top-4 duration-300">
                 <div className="bg-indigo-50 p-6 rounded-3xl mb-8 border border-indigo-100">
@@ -478,6 +496,103 @@ export const Settings: React.FC = () => {
                        </div>
                     </label>
                   </div>
+                </div>
+              </div>
+            )}
+            
+            {activeTab === 'activities' && (
+              <div className="animate-in fade-in slide-in-from-top-4 duration-300">
+                <div className="bg-indigo-50 p-6 rounded-3xl mb-8 border border-indigo-100">
+                   <h4 className="m-0 mb-4 text-indigo-800 text-sm font-black flex items-center gap-2">
+                     <Zap size={18} />
+                     ACTIVITY DEFINITIONS
+                   </h4>
+                   <p className="text-[11px] text-indigo-600 font-medium mb-6">Manage schedule activities, colors, and duration defaults.</p>
+                   
+                   <div className="space-y-4">
+                     {Object.entries(activities).map(([code, act]: [string, any]) => (
+                       <div key={code} className="grid grid-cols-1 md:grid-cols-6 gap-4 items-center bg-white p-4 rounded-2xl border border-indigo-100 shadow-sm relative group">
+                         <button 
+                           onClick={() => {
+                             const newActs = { ...activities };
+                             delete newActs[code];
+                             setActivities(newActs);
+                           }}
+                           className="absolute -top-3 -right-3 w-6 h-6 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-rose-500 hover:text-white"
+                         >
+                           <X size={12} />
+                         </button>
+                         <div className="font-extrabold text-slate-700 items-center gap-2 max-w-full">
+                           <input
+                            type="text"
+                            disabled
+                            value={code}
+                            className="w-full text-xs p-2 border border-slate-200 rounded-xl bg-slate-50 opacity-70 font-mono"
+                           />
+                         </div>
+                         <div className="col-span-2">
+                           <input 
+                             placeholder="Activity Label"
+                             className="w-full p-2 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-indigo-500"
+                             value={act.label}
+                             onChange={(e) => setActivities({ ...activities, [code]: { ...act, label: e.target.value } })}
+                           />
+                         </div>
+                         <div>
+                           <select 
+                             className="w-full p-2 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-indigo-500"
+                             value={act.duration || 'custom'}
+                             onChange={(e) => setActivities({ ...activities, [code]: { ...act, duration: e.target.value } })}
+                           >
+                             <option value="1">15 mins</option>
+                             <option value="2">30 mins</option>
+                             <option value="4">1 hour</option>
+                             <option value="full">Full Day</option>
+                             <option value="custom">Custom Dialog</option>
+                           </select>
+                         </div>
+                         <div>
+                            <select 
+                             className="w-full p-2 border border-slate-200 rounded-xl text-[10px] font-bold outline-none focus:border-indigo-500 uppercase"
+                             value={act.category || 'work'}
+                             onChange={(e) => setActivities({ ...activities, [code]: { ...act, category: e.target.value } })}
+                           >
+                             <option value="work">Work / Shift</option>
+                             <option value="break">Break</option>
+                             <option value="absence">Absence</option>
+                           </select>
+                         </div>
+                         <div className="flex gap-2 items-center">
+                           <input 
+                             placeholder="Tailwind Color (e.g. bg-blue-200)"
+                             className="w-full p-2 border border-slate-200 rounded-xl text-[10px] font-mono outline-none focus:border-indigo-500"
+                             value={act.color}
+                             onChange={(e) => setActivities({ ...activities, [code]: { ...act, color: e.target.value } })}
+                           />
+                           <div className={`w-8 h-8 rounded border border-slate-300 min-w-[2rem] ${act.color}`}></div>
+                         </div>
+                       </div>
+                     ))}
+                   </div>
+                   
+                   <div className="mt-6 flex justify-end">
+                     <button 
+                       onClick={() => {
+                         const newCode = prompt("Enter a unique Activity Code (e.g. TR for Trainings):");
+                         if (newCode && !activities[newCode]) {
+                           setActivities({ 
+                             ...activities, 
+                             [newCode.toUpperCase()]: { label: "New Activity", color: "bg-slate-200", duration: "custom", category: "work" } 
+                           });
+                         } else if (newCode) {
+                           alert("Code already exists.");
+                         }
+                       }}
+                       className="px-4 py-2 bg-indigo-200 text-indigo-700 hover:bg-indigo-300 rounded-xl font-bold flex gap-2 items-center text-xs"
+                     >
+                       <Plus size={14} /> Add New Activity
+                     </button>
+                   </div>
                 </div>
               </div>
             )}
@@ -620,6 +735,54 @@ export const Settings: React.FC = () => {
                             <span className="text-xs font-semibold text-slate-600">{ui.label}</span>
                           </label>
                         ))}
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <h4 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest mb-3">Allowed Activities</h4>
+                      <div className="grid grid-cols-2 gap-2">
+                        {Object.keys(settings.activities || {}).map((actCode) => (
+                           <label key={actCode} className="flex items-center gap-3 p-2 bg-slate-50 rounded-xl cursor-pointer hover:bg-slate-100 transition-all">
+                             <input
+                               type="checkbox"
+                               checked={(roles[roleName].allowedActivities || []).includes(actCode)}
+                               onChange={(e) => {
+                                  setRoles((prev: any) => {
+                                    const acts = prev[roleName].allowedActivities || [];
+                                    const newActs = e.target.checked 
+                                      ? [...acts, actCode]
+                                      : acts.filter((c: string) => c !== actCode);
+                                    return {
+                                      ...prev,
+                                      [roleName]: { ...prev[roleName], allowedActivities: newActs }
+                                    };
+                                  });
+                               }}
+                               className="w-4 h-4 text-blue-600 rounded-lg border-slate-300 focus:ring-blue-500"
+                             />
+                             <span className="text-xs font-semibold text-slate-600">{actCode}</span>
+                           </label>
+                        ))}
+                         <label className="flex items-center gap-3 p-2 bg-slate-50 rounded-xl cursor-pointer hover:bg-slate-100 transition-all">
+                           <input
+                             type="checkbox"
+                             checked={(roles[roleName].allowedActivities || []).includes('REMOVE')}
+                             onChange={(e) => {
+                                setRoles((prev: any) => {
+                                  const acts = prev[roleName].allowedActivities || [];
+                                  const newActs = e.target.checked 
+                                    ? [...acts, 'REMOVE']
+                                    : acts.filter((c: string) => c !== 'REMOVE');
+                                  return {
+                                    ...prev,
+                                    [roleName]: { ...prev[roleName], allowedActivities: newActs }
+                                  };
+                                });
+                             }}
+                             className="w-4 h-4 text-blue-600 rounded-lg border-slate-300 focus:ring-blue-500"
+                           />
+                           <span className="text-xs font-semibold text-slate-600">REMOVE</span>
+                         </label>
                       </div>
                     </div>
                   </div>
