@@ -12,6 +12,20 @@ export const Login: React.FC = () => {
   const [isFirstLogin, setIsFirstLogin] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showDbSetup, setShowDbSetup] = useState(false);
+  const [dbUrl, setDbUrl] = useState('');
+  const [dbKey, setDbKey] = useState('');
+
+  const handleSaveDb = () => {
+    if (!dbUrl || !dbKey) {
+      alert("Please fill both URL and Key");
+      return;
+    }
+    localStorage.setItem('SUPABASE_URL', dbUrl);
+    localStorage.setItem('SUPABASE_KEY', dbKey);
+    setShowDbSetup(false);
+    window.location.reload(); // Reload to initialize store with new credentials
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -136,7 +150,13 @@ export const Login: React.FC = () => {
             >
               {loading ? 'Saving...' : 'Save Password'}
             </button>
-            {error && <p className="text-[11px] mt-4 font-semibold text-red-500">{error}</p>}
+            {error && (
+              <div className="mt-4 p-4 bg-rose-50 border border-rose-100 rounded-2xl animate-in fade-in slide-in-from-top-2 duration-300">
+                <p className="text-[11px] text-rose-600 font-bold text-center leading-relaxed m-0">
+                  {error}
+                </p>
+              </div>
+            )}
           </form>
         </div>
       </div>
@@ -171,9 +191,74 @@ export const Login: React.FC = () => {
           >
             {loading ? 'Verifying...' : 'Sign In'}
           </button>
-          {error && <p className="text-[11px] mt-4 font-semibold text-red-500">{error}</p>}
+          {error && (
+            <div className="mt-4 p-4 bg-rose-50 border border-rose-100 rounded-2xl animate-in fade-in slide-in-from-top-2 duration-300">
+              <p className="text-[11px] text-rose-600 font-bold text-center leading-relaxed m-0">
+                {error}
+                {error.includes('Database not configured') && (
+                  <button 
+                    type="button"
+                    onClick={() => setShowDbSetup(true)}
+                    className="block mx-auto mt-2 text-indigo-600 underline hover:text-indigo-800 font-black"
+                  >
+                    Configure Database Connection
+                  </button>
+                )}
+              </p>
+            </div>
+          )}
+
+          {showDbSetup && (
+            <div className="fixed inset-0 bg-indigo-900/40 backdrop-blur-sm z-[10001] flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl animate-in fade-in zoom-in-95 duration-300">
+                <h3 className="text-xl font-black text-slate-800 mb-2">Connect Database</h3>
+                <p className="text-xs text-slate-500 mb-6 font-medium leading-relaxed">To enable cloud sync and real login, please provide your Supabase credentials.</p>
+                
+                <div className="space-y-4">
+                  <div className="text-left">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1.5 ml-1">Supabase URL</label>
+                    <input 
+                      type="text" 
+                      value={dbUrl}
+                      onChange={e => setDbUrl(e.target.value)}
+                      placeholder="https://xxxx.supabase.co"
+                      className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-bold outline-none focus:border-indigo-500 transition-all font-mono"
+                    />
+                  </div>
+                  <div className="text-left">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1.5 ml-1">Anon Key</label>
+                    <input 
+                      type="password" 
+                      value={dbKey}
+                      onChange={e => setDbKey(e.target.value)}
+                      placeholder="eyJhbGciOiJIUzI1Ni..."
+                      className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-bold outline-none focus:border-indigo-500 transition-all font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex gap-3 mt-8">
+                  <button 
+                    type="button"
+                    onClick={() => setShowDbSetup(false)}
+                    className="flex-1 py-4 bg-slate-100 text-slate-600 font-black rounded-2xl hover:bg-slate-200 transition-all text-xs"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={handleSaveDb}
+                    className="flex-1 py-4 bg-indigo-600 text-white font-black rounded-2xl hover:bg-indigo-700 shadow-xl shadow-indigo-200 transition-all text-xs"
+                  >
+                    Connect
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </form>
       </div>
     </div>
   );
 };
+
