@@ -141,7 +141,7 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* Channel Dropdown */}
-        {currentView !== 'users' && (
+        {currentView !== 'users' && currentView !== 'settings' && (
           <select 
             value={channel} 
             onChange={(e) => setChannel(e.target.value)}
@@ -163,28 +163,32 @@ export const Dashboard: React.FC = () => {
           />
         )}
 
-        {/* Global Filters - Hidden for Forecast, Users, and Settings Views */}
-        {currentView !== 'forecast' && currentView !== 'users' && currentView !== 'settings' && (
+        {/* Global Filters - Hidden for Forecast and Settings Views, Selective for Users View */}
+        {currentView !== 'forecast' && currentView !== 'settings' && (
           <>
-            <select 
-              value={sortBy} 
-              onChange={(e) => setSortBy(e.target.value)}
-              className="px-2 py-1.5 rounded-xl cursor-pointer text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-50 transition-all flex-shrink-0 outline-none max-w-[120px]"
-            >
-              <option value="interval">Sort: Interval</option>
-              <option value="nama">Sort: Name (A-Z)</option>
-            </select>
+            {currentView !== 'users' && (
+              <>
+                <select 
+                  value={sortBy} 
+                  onChange={(e) => setSortBy(e.target.value)}
+                  className="px-2 py-1.5 rounded-xl cursor-pointer text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-50 transition-all flex-shrink-0 outline-none max-w-[120px]"
+                >
+                  <option value="interval">Sort: Interval</option>
+                  <option value="nama">Sort: Name (A-Z)</option>
+                </select>
 
-            <select 
-              value={filterTL} 
-              onChange={(e) => setFilterTL(e.target.value)}
-              className="px-2 py-1.5 rounded-xl cursor-pointer text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-50 transition-all flex-shrink-0 outline-none max-w-[120px]"
-            >
-              <option value="">All Leaders</option>
-              {leaders.map(l => (
-                <option key={l} value={l}>{l}</option>
-              ))}
-            </select>
+                <select 
+                  value={filterTL} 
+                  onChange={(e) => setFilterTL(e.target.value)}
+                  className="px-2 py-1.5 rounded-xl cursor-pointer text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-50 transition-all flex-shrink-0 outline-none max-w-[120px]"
+                >
+                  <option value="">All Leaders</option>
+                  {leaders.map(l => (
+                    <option key={l} value={l}>{l}</option>
+                  ))}
+                </select>
+              </>
+            )}
 
             <div className="relative flex-shrink-0">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -219,7 +223,7 @@ export const Dashboard: React.FC = () => {
         )}
 
         {/* Actions Dropdown */}
-        {currentView !== 'users' && currentView !== 'forecast' && (
+        {currentView !== 'users' && currentView !== 'forecast' && currentView !== 'settings' && (
           <div className="relative group flex-shrink-0">
             <button className="px-3.5 py-2 rounded-xl cursor-pointer text-xs font-semibold border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-all flex items-center gap-1.5 min-w-[100px] justify-between">
               <div className="flex items-center gap-1.5">

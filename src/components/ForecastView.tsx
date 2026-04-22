@@ -32,6 +32,7 @@ import {
   FileSpreadsheet,
   LineChart as LineChartIcon,
   Users,
+  RefreshCw,
 } from "lucide-react";
 import {
   format,
@@ -197,10 +198,10 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
             });
           };
 
-          if (normRes.length === (24 * 60) / intervalSize) {
+          if (normRes.length > 0) {
             setIntervalPattern(mapPattern(normRes));
           }
-          if (holRes.length === (24 * 60) / intervalSize) {
+          if (holRes.length > 0) {
             setHolidayPattern(mapPattern(holRes));
           }
         } else {
@@ -213,13 +214,11 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
           );
           if (savedNorm) {
             const parsed = JSON.parse(savedNorm);
-            if (parsed.length === (24 * 60) / intervalSize)
-              setIntervalPattern(parsed);
+            if (parsed.length > 0) setIntervalPattern(parsed);
           }
           if (savedHol) {
             const parsed = JSON.parse(savedHol);
-            if (parsed.length === (24 * 60) / intervalSize)
-              setHolidayPattern(parsed);
+            if (parsed.length > 0) setHolidayPattern(parsed);
           }
         }
       } catch (err) {
@@ -695,14 +694,36 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
               // 3. ditotalkan semuanya
               const totalAverageAgents = Object.values(timeAverages).reduce((a, b) => a + b, 0);
 
-              // 4. dibagi dengan (stafftime * utilisasi)
+              // 4. Hitung dengan (Total hours per day / (Staff Time * util))
               const intervalsInDay = Object.keys(timeSums).length;
               const hoursPerInterval = intervalsInDay > 0 ? 24 / intervalsInDay : 0;
-              const totalAverageHours = totalAverageAgents * hoursPerInterval;
+              const totalAverageHoursNeededPerDay = totalAverageAgents * hoursPerInterval;
 
               const staffTime = yearParams.staff || 9;
               const util = (yearParams.util || 80) / 100;
-              forecastHC = Math.ceil(totalAverageHours / (staffTime * util));
+              
+              // Hitung rasio Hari Libur / Hari Kerja per bulannya
+              const totalDaysInMonth = new Date(y, monthIdx + 1, 0).getDate();
+              let agentWorkingDays = 0;
+              for (let d = 1; d <= totalDaysInMonth; d++) {
+                const dtStr = `${y}-${String(monthIdx + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+                const dt = new Date(`${dtStr}T12:00:00Z`);
+                
+                const isHoliday = !!(settings?.holidays && settings.holidays[dtStr]);
+                const biz = settings?.bizRules || { weekendDays: [0, 6], holidayClosed: true };
+                const isWeekend = biz.weekendDays ? biz.weekendDays.includes(dt.getUTCDay()) : (dt.getUTCDay() === 0 || dt.getUTCDay() === 6);
+                const isClosedDate = isWeekend || (isHoliday && biz.holidayClosed);
+                
+                if (!isClosedDate) {
+                  agentWorkingDays++;
+                }
+              }
+              if (agentWorkingDays === 0) agentWorkingDays = 22; // Fallback aman
+              
+              const rosterRatio = totalDaysInMonth / agentWorkingDays;
+              const dailyHC = totalAverageHoursNeededPerDay / (staffTime * util);
+              
+              forecastHC = Math.ceil(dailyHC * rosterRatio);
             }
           }
 
@@ -1448,6 +1469,169 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
       alert("Failed to save forecast results.");
     } finally {
       setIsSavingIntervals(false);
+    }
+  };
+
+  const [isSyncingHC, setIsSyncingHC] = useState(false);
+
+  const syncFullYearHC = async () => {
+    if (!settings.apiUrl || !settings.apiKey) return;
+    if (intervalPattern.length === 0) {
+      alert("Please ensure you have an interval pattern configured first (Sync Pattern in Forecast Gen tab).");
+      return;
+    }
+    
+    setIsSyncingHC(true);
+    try {
+      const yearStart = `${year}-01-01T00:00:00Z`;
+      const yearEnd = `${year}-12-31T23:59:59Z`;
+
+      // 1. Fetch all monthly forecasts and all parameters for this year
+      const forecastRes = await callSupabaseAPI(
+        "wfm_traffic_forecast",
+        "GET",
+        undefined,
+        `?channel=eq.${channel}&timestamp=gte.${yearStart}&timestamp=lte.${yearEnd}&select=*`
+      );
+
+      if (!forecastRes || forecastRes.length === 0) {
+        alert("No monthly traffic forecasts found for this year (check monthly data in Supabase).");
+        return;
+      }
+
+      const payloads: any[] = [];
+      const hoursPerInterval = intervalSize / 60;
+
+      // Base parameters from current UI as starting point
+      let lastParams = {
+        aht: Number(displayedParams.aht),
+        resp: Number(displayedParams.resp),
+        sla: Number(displayedParams.sla),
+        shrink: Number(displayedParams.shrink),
+        occ: Number(displayedParams.occ),
+        util: Number(displayedParams.util),
+        staff: Number(displayedParams.staff)
+      };
+
+      for (let mIdx = 0; mIdx < 12; mIdx++) {
+        const mKey = `${year}-${String(mIdx + 1).padStart(2, "0")}`;
+        
+        // Update params if this month has specific records
+        const monthRecords = forecastRes.filter((f: any) => f.timestamp.startsWith(mKey));
+        const trafficData = monthRecords.find((f: any) => f.type === 'monthly');
+        
+        monthRecords.forEach((r: any) => {
+          if (r.type === 'param_aht') lastParams.aht = r.volume;
+          if (r.type === 'param_resp') lastParams.resp = r.volume;
+          if (r.type === 'param_sla') lastParams.sla = r.volume;
+          if (r.type === 'param_shrink') lastParams.shrink = r.volume;
+          if (r.type === 'param_occ') lastParams.occ = r.volume;
+          if (r.type === 'param_util') lastParams.util = r.volume;
+          if (r.type === 'param_staff') lastParams.staff = r.volume;
+        });
+
+        if (trafficData) {
+          const totalVol = trafficData.volume || 0;
+          const daysInMonth = new Date(year, mIdx + 1, 0).getDate();
+          
+          // Logic: Volume monthly / calendar days
+          const avgDailyVol = totalVol / daysInMonth;
+          
+          let totalDailyWorkloadAgents = 0;
+          const sumPatternWeight = intervalPattern.reduce((acc: number, p: any) => acc + (Number(p.weight) || 0), 0);
+          
+          // Deduce actual interval size from pattern length (avoid settings mismatch)
+          const actualIntervalSizeSeconds = intervalPattern.length > 0 ? (24 * 3600) / intervalPattern.length : intervalSize * 60;
+          
+          // Processing exactly as per the intervals saved (matches daily view logic)
+          intervalPattern.forEach((p: any) => {
+            const rawWeight = Number(p.weight) || 0;
+            const weightRatio = sumPatternWeight > 0 ? (rawWeight / sumPatternWeight) : (1 / intervalPattern.length);
+            const intervalVol = avgDailyVol * weightRatio;
+            
+            // Map the operating hours logic as daily view does
+            const [hh, mm] = p.time.split(":").map(Number);
+            const dummyDate = new Date(Date.UTC(2023, 0, 2, hh, mm)); 
+            const operational = isTimeOperational(dummyDate, channel);
+            
+            if (operational && intervalVol > 0) {
+              const agents = calculateAgents(
+                Number(lastParams.sla), 
+                Number(lastParams.resp), 
+                intervalVol,
+                Number(lastParams.aht), 
+                Number(lastParams.shrink), 
+                Number(lastParams.occ),
+                actualIntervalSizeSeconds, 
+                operational, 
+                channel
+              );
+              totalDailyWorkloadAgents += agents;
+            }
+          });
+          
+          // Total Hours in a day = Sum of Agents * (Interval / 60)
+          const totalHoursNeededInOneDay = totalDailyWorkloadAgents * (actualIntervalSizeSeconds / 3600);
+          
+          // Logic: Total daily hours dibagi (staff time * utilization)
+          const staffTimeHours = Number(lastParams.staff) || 9;
+          const utilizationPct = (Number(lastParams.util) || 80) / 100;
+          
+          // Rasio Hari Libur / Hari Kerja
+          let agentWorkingDays = 0;
+          for (let d = 1; d <= daysInMonth; d++) {
+            const dtStr = `${year}-${String(mIdx + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+            const dt = new Date(`${dtStr}T12:00:00Z`);
+            
+            const isHoliday = !!(settings?.holidays && settings.holidays[dtStr]);
+            const biz = settings?.bizRules || { weekendDays: [0, 6], holidayClosed: true };
+            const isWeekend = biz.weekendDays ? biz.weekendDays.includes(dt.getUTCDay()) : (dt.getUTCDay() === 0 || dt.getUTCDay() === 6);
+            
+            // Assume closed if it's weekend, or if it's a holiday and holiday closed is true
+            const isClosedDate = isWeekend || (isHoliday && biz.holidayClosed);
+            
+            if (!isClosedDate) {
+              agentWorkingDays++;
+            }
+          }
+          if (agentWorkingDays === 0) agentWorkingDays = 22; // Fallback jika loop gagal
+          
+          const rosterRatio = daysInMonth / agentWorkingDays;
+          
+          // Kalkulasi Final: HC Harian * Rasio Roster Bulanan
+          const dailyHC = totalHoursNeededInOneDay / (staffTimeHours * utilizationPct);
+          const hcNeeded = Math.ceil(dailyHC * rosterRatio);
+          
+          if (hcNeeded > 0) {
+            payloads.push({
+              channel,
+              timestamp: `${mKey}-01T00:00:00Z`,
+              volume: hcNeeded,
+              type: "monthly_hc"
+            });
+          }
+        }
+      }
+
+      if (payloads.length > 0) {
+        await callSupabaseAPI(
+          "wfm_traffic_forecast",
+          "DELETE",
+          undefined,
+          `?channel=eq.${channel}&timestamp=gte.${yearStart}&timestamp=lte.${yearEnd}&type=eq.monthly_hc`
+        );
+        await callSupabaseAPI("wfm_traffic_forecast", "POST", payloads);
+
+        alert(`Successfully calculated HC for ${payloads.length} months using Calendar Days logic.`);
+        fetchMonthlyData();
+      } else {
+        alert("No monthly traffic forecast found for this year. Please check your data.");
+      }
+    } catch (err: any) {
+      console.error("Error calculating HC:", err);
+      alert("Error: " + err.message);
+    } finally {
+      setIsSyncingHC(false);
     }
   };
 
@@ -4069,6 +4253,21 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                   <h3 className="text-xs font-extrabold text-violet-800">
                     Monthly Headcount Comparison
                   </h3>
+                  
+                  <button
+                    onClick={syncFullYearHC}
+                    disabled={isSyncingHC}
+                    className="ml-4 px-3 py-1.5 bg-white border border-violet-200 text-violet-600 rounded-lg text-[10px] font-bold hover:bg-violet-600 hover:text-white transition-all flex items-center gap-2 shadow-sm disabled:opacity-50"
+                    title="Calculate HC for the entire year based on Monthly Forecast & Pattern"
+                  >
+                    {isSyncingHC ? (
+                      <RefreshCw size={12} className="animate-spin" />
+                    ) : (
+                      <BrainCircuit size={12} />
+                    )}
+                    {isSyncingHC ? "Calculating..." : `Sync HC for ${year}`}
+                  </button>
+
                   <div className="flex items-center gap-4 bg-white p-2 px-4 rounded-xl border border-slate-200 ml-auto">
                     <div className="text-[9px] text-slate-500 font-bold uppercase">AHT: <span className="text-indigo-600">{displayedParams.aht}s</span></div>
                     <div className="text-[9px] text-slate-500 font-bold uppercase">Resp: <span className="text-indigo-600">{displayedParams.resp}s</span></div>
