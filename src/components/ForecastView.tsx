@@ -409,7 +409,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
           "wfm_traffic_forecast",
           "GET",
           undefined,
-          `?channel=eq.${channel}&timestamp=gte.${start}&timestamp=lte.${end}&type=eq.interval&select=timestamp,volume&order=timestamp.desc`,
+          `?channel=eq.${channel}&timestamp=gte.${start}&timestamp=lte.${end}&type=in.(interval,interval_agents)&select=timestamp,volume,type&order=timestamp.desc`,
         ),
       ]);
       
@@ -485,24 +485,49 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
           const m = (binIndex * histIntervalSize) % 60;
           const binTime = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
           if (bins[binTime]) {
-            bins[binTime].forecast += item.volume || 0;
+            if (item.type === 'interval') {
+              bins[binTime].forecast += item.volume || 0;
+            } else if (item.type === 'interval_agents') {
+              if (!(bins[binTime] as any).dbAgentReqs) (bins[binTime] as any).dbAgentReqs = [];
+              (bins[binTime] as any).dbAgentReqs.push(item.volume || 0);
+            }
           }
+        });
+
+        // Post-process bins to calculate Agent Requirement
+        Object.keys(bins).forEach(timeKey => {
+          const b = bins[timeKey];
+          const binAht = b.ahtCount > 0 ? Math.round(b.totalAht / b.ahtCount) : Number(displayedParams.aht) || 300;
+          
+          let req = null;
+          const dbReqs = (b as any).dbAgentReqs;
+          
+          if (dbReqs && dbReqs.length > 0) {
+            // If we have stored requirements, we take the average/max for the bin.
+            // Usually, if multiple small intervals are merged into a larger bin, 
+            // the headcount needed for the larger bin is the average headcounts of the sub-intervals (if they were constant over their sub-intervals).
+            // Example: 10 agents for 15m, 20 agents for next 15m. For 30m, you need 15 agents worth of work.
+            req = Math.ceil(dbReqs.reduce((sum: number, r: number) => sum + r, 0) / dbReqs.length);
+          }
+          (b as any).agentNeed = req;
         });
 
         const totalVolume = Object.values(bins).reduce((sum, b) => sum + b.volume, 0);
         const totalForecast = Object.values(bins).reduce((sum, b) => sum + b.forecast, 0);
+        const totalAgentHours = Object.values(bins).reduce((sum, b: any) => sum + ((b.agentNeed || 0) * (histIntervalSize / 60)), 0);
         const holidayName = settings.holidays[date];
 
         return {
           date,
           totalVolume,
           totalForecast,
+          totalAgentHours,
           bins,
           isHoliday: !!holidayName,
           holidayName,
         };
       });
-  }, [historicalIntervals, forecastIntervals, histIntervalSize, settings.holidays]);
+  }, [historicalIntervals, forecastIntervals, histIntervalSize, settings.holidays, displayedParams]);
 
   const intervalTotals = useMemo(() => {
     const f = intervalData.reduce((acc, curr) => acc + (curr.forecast || 0), 0);
@@ -1649,35 +1674,37 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
         const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
         const response = await ai.models.generateContent({
           model: "gemini-3.1-pro-preview",
-          contents: `Generate a normalized daily traffic distribution pattern for a contact center channel "${channel}" with ${intervalSize}-minute intervals.
+          contents: `Generate a realistic daily traffic distribution pattern for a contact center channel "${channel}" with ${intervalSize}-minute intervals.
              This pattern is for a ${type === "holiday_pattern" ? "Weekend/Holiday" : "Normal Business Day"}.
-             The output must be a valid JSON array of objects like this: [{"time": "00:00", "weight": 0.05}, ...].
-             Weights are percentages and must sum exactly to 100.
-             There should be exactly ${(24 * 60) / intervalSize} entries.
-             Consider ${type === "holiday_pattern" ? "lower volumes with a flatter peak" : "typical business day with peaks in mid-morning and mid-afternoon"}.
+             The output must be a valid JSON array of objects like this: [{"time": "09:00", "weight": 5.2}, ...].
+             Weights are percentages (0 to 100) and must sum up exactly to 100.
+             There should be exactly ${(24 * 60) / intervalSize} entries (one for each interval of a 24-hour day).
+             CRITICAL: Do NOT provide a flat distribution. A typical business day has peaks (e.g., 10:00-12:00 and 14:00-16:00) and very low traffic at night (00:00-06:00).
              Include all intervals for a full 24-hour day in HH:mm format.`,
         });
         const text = response.text || "[]";
         const jsonMatch = text.match(/\[.*\]/s);
         if (jsonMatch) {
-          patternData = JSON.parse(jsonMatch[0]);
+          const rawPatternData = JSON.parse(jsonMatch[0]);
+          // Normalization: Ensure AI results sum to 100 and handle possible decimal/percentage confusion
+          const currentSum = rawPatternData.reduce((acc: number, p: any) => acc + (Number(p.weight) || 0), 0);
+          if (currentSum > 0) {
+            patternData = rawPatternData.map((p: any) => ({
+              time: p.time,
+              weight: (Number(p.weight) / currentSum) * 100
+            }));
+          } else {
+            patternData = rawPatternData;
+          }
         }
       } else {
-        const weeksToLookBack = intervalMethod === "sdsw" ? 8 : 4;
+        const weeksToLookBack = 52; 
         const historicalIntervals: Record<string, number[]> = {};
 
-        // Ensure we refer to baseYear for actual historical patterns, not arbitrary 'today'
-        const baseDateForPattern = new Date(Date.UTC(baseYear, 11, 31));
+        // Use the actual current date as the reference for looking back to find real history
+        const baseDateForPattern = new Date(); 
 
-        for (let i = 1; i <= weeksToLookBack * 2; i++) {
-          // look twice as far to ensure we find matching days
-          if (
-            Object.keys(historicalIntervals).some(
-              (k) => historicalIntervals[k].length >= weeksToLookBack,
-            )
-          )
-            break;
-
+        for (let i = 1; i <= weeksToLookBack; i++) {
           const targetDate = subWeeks(baseDateForPattern, i);
           const dateStr = formatInUTC(targetDate, "yyyy-MM-dd");
 
@@ -1693,66 +1720,67 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
             "wfm_traffic_actual",
             "GET",
             undefined,
-            `?channel=eq.${channel}&timestamp=gte.${start}&timestamp=lte.${end}&select=*`,
+            `?timestamp=gte.${start}&timestamp=lte.${end}&select=*`,
           );
 
           if (res && res.length > 0) {
-            const [y, m, d] = dateStr.split("-").map(Number);
-            const dayStartUTC = Date.UTC(y, m - 1, d, 0, 0, 0);
+            const filteredRes = res.filter((item: any) => 
+              item.channel?.toLowerCase() === channel.toLowerCase()
+            );
 
-            for (let j = 0; j < (24 * 60) / intervalSize; j++) {
-              const slotStart = dayStartUTC + j * intervalSize * 60 * 1000;
-              const slotStartDate = new Date(slotStart);
-              const hh = String(slotStartDate.getUTCHours()).padStart(2, "0");
-              const mm = String(slotStartDate.getUTCMinutes()).padStart(2, "0");
-              const slotStr = `${hh}:${mm}`;
+            if (filteredRes.length > 0) {
+              const [y, m, d] = dateStr.split("-").map(Number);
+              const dayStartUTC = Date.UTC(y, m - 1, d, 0, 0, 0);
 
-              const vol = res
-                .filter((item: any) => {
-                  const ts = new Date(item.timestamp).getTime();
-                  return (
-                    ts >= slotStart && ts < slotStart + intervalSize * 60 * 1000
-                  );
-                })
-                .reduce(
-                  (sum: number, item: any) => sum + (item.volume || 0),
-                  0,
-                );
+              for (let j = 0; j < (24 * 60) / intervalSize; j++) {
+                const slotStart = dayStartUTC + j * intervalSize * 60 * 1000;
+                const slotStartDate = new Date(slotStart);
+                const hh = String(slotStartDate.getUTCHours()).padStart(2, "0");
+                const mm = String(slotStartDate.getUTCMinutes()).padStart(2, "0");
+                const slotStr = `${hh}:${mm}`;
 
-              if (!historicalIntervals[slotStr])
-                historicalIntervals[slotStr] = [];
-              historicalIntervals[slotStr].push(vol);
+                const vol = filteredRes
+                  .filter((item: any) => {
+                    const ts = new Date(item.timestamp).getTime();
+                    return ts >= slotStart && ts < slotStart + intervalSize * 60 * 1000;
+                  })
+                  .reduce((sum: number, item: any) => sum + (item.volume || 0), 0);
+
+                if (!historicalIntervals[slotStr]) historicalIntervals[slotStr] = [];
+                historicalIntervals[slotStr].push(vol);
+              }
             }
           }
+          
+          // If we found at least 8 matching days, we likely have enough variance for a good pattern
+          const daysFoundSoFar = Object.values(historicalIntervals)[0]?.length || 0;
+          if (daysFoundSoFar >= 8) break;
         }
 
         const totalAvgVolume = Object.values(historicalIntervals).reduce(
           (sum, vals) => {
-            const avg =
-              vals.length > 0
-                ? vals.reduce((a, b) => a + b, 0) / vals.length
-                : 0;
+            const avg = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
             return sum + avg;
           },
           0,
         );
 
         const sortedTimes = Object.keys(historicalIntervals).sort();
-        if (sortedTimes.length > 0) {
+        if (sortedTimes.length > 0 && totalAvgVolume > 0) {
           sortedTimes.forEach((time) => {
             const vals = historicalIntervals[time];
-            const avg =
-              vals.length > 0
-                ? vals.reduce((a, b) => a + b, 0) / vals.length
-                : 0;
-            const weight =
-              totalAvgVolume > 0
-                ? (avg / totalAvgVolume) * 100
-                : 100 / ((24 * 60) / intervalSize);
+            const avg = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+            const weight = (avg / totalAvgVolume) * 100;
             patternData.push({ time, weight });
           });
         } else {
-          // Fallback if no matching historical data found
+          // Fallback if no matching historical data found or volume is zero
+          if (sortedTimes.length > 0 && totalAvgVolume === 0) {
+            alert(`Historical data was found but all volumes are 0 for channel "${channel}". Falling back to flat distribution.`);
+          } else {
+            alert(`No historical data found for "${channel}" in the 52-week window. Falling back to flat distribution.`);
+          }
+          
           Array.from({ length: (24 * 60) / intervalSize }).forEach((_, i) => {
             const h = Math.floor((i * intervalSize) / 60);
             const m = (i * intervalSize) % 60;
@@ -2848,7 +2876,8 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                           axisLine={false}
                           tickLine={false}
                         />
-                        <YAxis
+                         <YAxis
+                          domain={[0, 'auto']}
                           tick={{
                             fontSize: 8,
                             fill: "#64748b",
@@ -2856,7 +2885,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                           }}
                           axisLine={false}
                           tickLine={false}
-                          tickFormatter={(v) => `${v}%`}
+                          tickFormatter={(v) => `${v.toFixed(1)}%`}
                         />
                         <Tooltip
                           content={({ active, payload }) => {
@@ -5256,6 +5285,98 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                             ${avgAht > 0 ? "text-emerald-700" : "text-slate-200"}`}
                                         >
                                           {avgAht > 0 ? `${avgAht}s` : "-"}
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                );
+                              });
+                            })()}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* AGENT REQUIREMENT TABLE */}
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                       <Users size={14} className="text-indigo-600" />
+                       <h4 className="text-[10px] font-black text-slate-700 uppercase tracking-widest">
+                         5. Agent Requirement
+                       </h4>
+                    </div>
+                    <div className="overflow-hidden rounded-2xl border border-slate-100 shadow-sm bg-white">
+                      <div className="overflow-auto max-h-[500px] scrollbar-thin">
+                        <table className="w-full text-left border-collapse table-fixed min-w-[max-content]">
+                          <thead className="sticky top-0 z-30">
+                            <tr className="bg-slate-50 border-b border-slate-200">
+                              <th className="p-1 px-2 text-[8px] font-black text-slate-500 uppercase tracking-widest sticky left-0 bg-slate-50 z-40 w-16 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
+                                Intrvl
+                              </th>
+                              {processedHistorical.map((row, idx) => {
+                                const dayNum = new Date(row.date).getUTCDay();
+                                const isWeekEnd = dayNum === 0 || dayNum === 6;
+                                return (
+                                  <th
+                                    key={idx}
+                                    className={`p-1 text-[8px] font-black uppercase tracking-widest text-center border-l border-slate-100 w-16 
+                                      ${row.isHoliday ? "text-rose-500 bg-rose-50" : isWeekEnd ? "bg-slate-100 text-slate-500" : "text-slate-400 bg-slate-50"}`}
+                                  >
+                                    <div className="flex flex-col scale-[0.85] leading-tight">
+                                      <span className="opacity-60 font-medium">{formatInUTC(new Date(row.date), "EEE")}</span>
+                                      <span className="font-extrabold">{formatInUTC(new Date(row.date), "dd MMM")}</span>
+                                    </div>
+                                  </th>
+                                );
+                              })}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-50">
+                            {/* Summary FTE Harian Row (At Top) */}
+                            <tr className="bg-indigo-50/70 font-black text-indigo-700 border-b-2 border-slate-200">
+                              <td className="p-1 px-2 text-[8px] uppercase sticky left-0 bg-indigo-50 z-10 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
+                                TOTAL FTE
+                              </td>
+                              {processedHistorical.map((row, idx) => {
+                                const dayNum = new Date(row.date).getUTCDay();
+                                const isWeekEnd = dayNum === 0 || dayNum === 6;
+                                const staffTime = Number(displayedParams.staff) || 9;
+                                const util = (Number(displayedParams.util) || 80) / 100;
+                                const effCapacity = staffTime * util;
+                                const fteNeed = Math.ceil((row as any).totalAgentHours / (effCapacity || 1));
+                                
+                                return (
+                                  <td key={idx} className={`p-1 text-center text-[9px] border-l border-indigo-100/30 ${row.isHoliday ? "bg-rose-50/50" : isWeekEnd ? "bg-slate-100/50" : ""}`}>
+                                    {fteNeed > 0 ? fteNeed : "-"}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                            {(() => {
+                              const numSlots = (24 * 60) / histIntervalSize;
+                              return Array.from({ length: numSlots }).map((_, i) => {
+                                const h = Math.floor((i * histIntervalSize) / 60);
+                                const m = (i * histIntervalSize) % 60;
+                                const timeStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+                                return (
+                                  <tr key={i} className="hover:bg-slate-50/50 transition-colors group">
+                                    <td className="p-1 px-2 text-[9px] font-black text-slate-400 sticky left-0 bg-white z-10 shadow-[1px_0_3px_rgba(0,0,0,0.05)] border-r border-slate-100 group-hover:text-indigo-600">
+                                      {timeStr}
+                                    </td>
+                                    {processedHistorical.map((dateRow, dIdx) => {
+                                      const bin = dateRow.bins[timeStr];
+                                      const dayNum = new Date(dateRow.date).getUTCDay();
+                                      const isWeekEnd = dayNum === 0 || dayNum === 6;
+                                      const agentNeed = bin ? (bin as any).agentNeed : null;
+                                      return (
+                                        <td 
+                                          key={dIdx} 
+                                          className={`p-1 text-center text-[9px] border-l border-slate-50 font-bold tracking-tighter
+                                            ${dateRow.isHoliday ? "bg-rose-50/30" : isWeekEnd ? "bg-slate-50/80" : ""}
+                                            ${agentNeed !== null && agentNeed > 0 ? "text-indigo-700" : "text-slate-200"}`}
+                                        >
+                                          {agentNeed !== null && agentNeed > 0 ? agentNeed : "-"}
                                         </td>
                                       );
                                     })}
