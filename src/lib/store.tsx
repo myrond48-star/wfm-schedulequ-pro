@@ -151,80 +151,77 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateSettings = (newSettings: Partial<SystemSettings>, skipSync = false) => {
-    setSettings(prev => {
-      const updated = { ...prev, ...newSettings };
-      
-      const syncToCloud = async (key: string, value: any) => {
-        if (skipSync) return;
+    setSettings(prev => ({ ...prev, ...newSettings }));
+
+    // Save to localStorage (Side effects outside of setSettings)
+    if (newSettings.apiUrl !== undefined) localStorage.setItem('SUPABASE_URL', newSettings.apiUrl);
+    if (newSettings.apiKey !== undefined) localStorage.setItem('SUPABASE_KEY', newSettings.apiKey);
+    
+    // Auto-trigger sync if credentials just provided
+    if (newSettings.apiUrl && newSettings.apiKey && !settings.apiUrl) {
+      setTimeout(() => syncSettingsFromDB(), 500);
+    }
+
+    const syncToCloud = async (key: string, value: any) => {
+      if (skipSync) return;
+      try {
+        const payload = { key, value: JSON.stringify(value) };
+        // Upsert logic for PostgREST
+        await callSupabaseAPI('wfm_config', 'POST', payload); 
+      } catch (e: any) {
+        // If conflict (already exists), update it
         try {
-          const payload = { key, value: JSON.stringify(value) };
-          // Use upsert pattern via callSupabaseAPI
-          // Note: callSupabaseAPI doesn't specifically have upsert but we can do a DELETE then POST or just POST if it's unique
-          // Better yet, for settings we can use a custom RPC or just handle it if it fails
-          await callSupabaseAPI('wfm_config', 'POST', payload); 
-        } catch (e) {
-          // If insert fails due to unique constraint, try update
-          try {
-             await callSupabaseAPI('wfm_config', 'PATCH', { value: JSON.stringify(value) }, `?key=eq.${key}`);
-          } catch {}
+           await callSupabaseAPI('wfm_config', 'PATCH', { value: JSON.stringify(value) }, `?key=eq.${key}`);
+        } catch (err) {
+          console.error("Failed to sync setting to cloud:", key, err);
         }
-      };
+      }
+    };
 
-      // Save to localStorage
-      if (newSettings.apiUrl !== undefined) localStorage.setItem('SUPABASE_URL', newSettings.apiUrl);
-      if (newSettings.apiKey !== undefined) localStorage.setItem('SUPABASE_KEY', newSettings.apiKey);
-      
-      // Auto-trigger sync if credentials just provided
-      if (newSettings.apiUrl && newSettings.apiKey && !prev.apiUrl) {
-        setTimeout(() => syncSettingsFromDB(), 500);
-      }
-
-      if (newSettings.adhId !== undefined) {
-        localStorage.setItem('ADH_SS_ID', newSettings.adhId);
-        syncToCloud('ADH_SS_ID', newSettings.adhId);
-      }
-      if (newSettings.channels !== undefined) {
-        localStorage.setItem('WFM_CHANNELS', JSON.stringify(newSettings.channels));
-        syncToCloud('WFM_CHANNELS', newSettings.channels);
-      }
-      if (newSettings.shifts !== undefined) {
-        localStorage.setItem('WFM_SHIFT_MAP', JSON.stringify(newSettings.shifts));
-        syncToCloud('WFM_SHIFT_MAP', newSettings.shifts);
-      }
-      if (newSettings.holidays !== undefined) {
-        localStorage.setItem('WFM_HOLIDAYS', JSON.stringify(newSettings.holidays));
-        syncToCloud('WFM_HOLIDAYS', newSettings.holidays);
-      }
-      if (newSettings.autoBreak !== undefined) {
-        localStorage.setItem('WFM_AUTO_BREAK', JSON.stringify(newSettings.autoBreak));
-        syncToCloud('WFM_AUTO_BREAK', newSettings.autoBreak);
-      }
-      if (newSettings.fridayBreak !== undefined) {
-        localStorage.setItem('WFM_FRIDAY_BREAK', JSON.stringify(newSettings.fridayBreak));
-        syncToCloud('WFM_FRIDAY_BREAK', newSettings.fridayBreak);
-      }
-      if (newSettings.puasa !== undefined) {
-        localStorage.setItem('WFM_PUASA', JSON.stringify(newSettings.puasa));
-        syncToCloud('WFM_PUASA', newSettings.puasa);
-      }
-      if (newSettings.puasaShifts !== undefined) {
-        localStorage.setItem('WFM_PUASA_SHIFTS', JSON.stringify(newSettings.puasaShifts));
-        syncToCloud('WFM_PUASA_SHIFTS', newSettings.puasaShifts);
-      }
-      if (newSettings.roles !== undefined) {
-        localStorage.setItem('WFM_ROLES', JSON.stringify(newSettings.roles));
-        syncToCloud('WFM_ROLES', newSettings.roles);
-      }
-      if (newSettings.publishStatus !== undefined) {
-        localStorage.setItem('WFM_PUBLISH_STATUS', JSON.stringify(newSettings.publishStatus));
-        syncToCloud('WFM_PUBLISH_STATUS', newSettings.publishStatus);
-      }
-      if (newSettings.bizRules !== undefined) {
-        localStorage.setItem('WFM_BIZ_RULES', JSON.stringify(newSettings.bizRules));
-        syncToCloud('WFM_BIZ_RULES', newSettings.bizRules);
-      }
-      return updated;
-    });
+    if (newSettings.adhId !== undefined) {
+      localStorage.setItem('ADH_SS_ID', newSettings.adhId);
+      syncToCloud('ADH_SS_ID', newSettings.adhId);
+    }
+    if (newSettings.channels !== undefined) {
+      localStorage.setItem('WFM_CHANNELS', JSON.stringify(newSettings.channels));
+      syncToCloud('WFM_CHANNELS', newSettings.channels);
+    }
+    if (newSettings.shifts !== undefined) {
+      localStorage.setItem('WFM_SHIFT_MAP', JSON.stringify(newSettings.shifts));
+      syncToCloud('WFM_SHIFT_MAP', newSettings.shifts);
+    }
+    if (newSettings.holidays !== undefined) {
+      localStorage.setItem('WFM_HOLIDAYS', JSON.stringify(newSettings.holidays));
+      syncToCloud('WFM_HOLIDAYS', newSettings.holidays);
+    }
+    if (newSettings.autoBreak !== undefined) {
+      localStorage.setItem('WFM_AUTO_BREAK', JSON.stringify(newSettings.autoBreak));
+      syncToCloud('WFM_AUTO_BREAK', newSettings.autoBreak);
+    }
+    if (newSettings.fridayBreak !== undefined) {
+      localStorage.setItem('WFM_FRIDAY_BREAK', JSON.stringify(newSettings.fridayBreak));
+      syncToCloud('WFM_FRIDAY_BREAK', newSettings.fridayBreak);
+    }
+    if (newSettings.puasa !== undefined) {
+      localStorage.setItem('WFM_PUASA', JSON.stringify(newSettings.puasa));
+      syncToCloud('WFM_PUASA', newSettings.puasa);
+    }
+    if (newSettings.puasaShifts !== undefined) {
+      localStorage.setItem('WFM_PUASA_SHIFTS', JSON.stringify(newSettings.puasaShifts));
+      syncToCloud('WFM_PUASA_SHIFTS', newSettings.puasaShifts);
+    }
+    if (newSettings.roles !== undefined) {
+      localStorage.setItem('WFM_ROLES', JSON.stringify(newSettings.roles));
+      syncToCloud('WFM_ROLES', newSettings.roles);
+    }
+    if (newSettings.publishStatus !== undefined) {
+      localStorage.setItem('WFM_PUBLISH_STATUS', JSON.stringify(newSettings.publishStatus));
+      syncToCloud('WFM_PUBLISH_STATUS', newSettings.publishStatus);
+    }
+    if (newSettings.bizRules !== undefined) {
+      localStorage.setItem('WFM_BIZ_RULES', JSON.stringify(newSettings.bizRules));
+      syncToCloud('WFM_BIZ_RULES', newSettings.bizRules);
+    }
   };
 
   return (

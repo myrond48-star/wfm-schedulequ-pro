@@ -27,6 +27,7 @@ export const Settings: React.FC = () => {
   const { settings, updateSettings, syncSettingsFromDB } = useAppStore();
   const [activeTab, setActiveTab] = useState('api');
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isPushing, setIsPushing] = useState(false);
 
   // Sync back local state if global settings change (e.g. from Cloud Sync)
   React.useEffect(() => {
@@ -54,6 +55,30 @@ export const Settings: React.FC = () => {
     await syncSettingsFromDB();
     setIsSyncing(false);
     showStatus("Settings refreshed from Cloud! ☁️");
+  };
+
+  const handlePushToCloud = async () => {
+    setIsPushing(true);
+    try {
+      // Logic to push all current settings to cloud
+      // We call updateSettings with same values but ensuring skipSync is false (default)
+      updateSettings({
+        adhId: settings.adhId,
+        channels: settings.channels,
+        shifts: settings.shifts,
+        holidays: settings.holidays,
+        autoBreak: settings.autoBreak,
+        fridayBreak: settings.fridayBreak,
+        puasa: settings.puasa,
+        puasaShifts: settings.puasaShifts,
+        roles: settings.roles,
+        bizRules: settings.bizRules
+      });
+      showStatus("All settings pushed to Cloud! 🚀");
+    } catch (err) {
+      console.error("Manual push failed:", err);
+    }
+    setIsPushing(false);
   };
   
   // API State
@@ -467,14 +492,26 @@ export const Settings: React.FC = () => {
                     </h4>
                     <p className="text-[10px] text-indigo-600 font-medium max-w-md">By configuring Supabase, your business rules, shifts, holidays, and role settings are automatically synced to the cloud and available across all browsers.</p>
                   </div>
-                  <button 
-                    onClick={handleRefreshFromCloud}
-                    disabled={isSyncing}
-                    className={`px-4 py-2 rounded-xl text-[10px] font-bold flex items-center gap-2 transition-all ${isSyncing ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-white text-indigo-600 hover:bg-indigo-600 hover:text-white shadow-sm'}`}
-                  >
-                    <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
-                    {isSyncing ? 'Syncing...' : 'Refresh from Cloud'}
-                  </button>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={handleRefreshFromCloud}
+                      disabled={isSyncing || isPushing}
+                      className={`px-4 py-2 rounded-xl text-[10px] font-bold flex items-center gap-2 transition-all ${isSyncing ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-white text-indigo-600 hover:bg-indigo-600 hover:text-white shadow-sm'}`}
+                      title="Pull latest settings from Cloud"
+                    >
+                      <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
+                      {isSyncing ? 'Syncing...' : 'Pull from Cloud'}
+                    </button>
+                    <button 
+                      onClick={handlePushToCloud}
+                      disabled={isSyncing || isPushing}
+                      className={`px-4 py-2 rounded-xl text-[10px] font-bold flex items-center gap-2 transition-all ${isPushing ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm'}`}
+                      title="Push current local settings to Cloud"
+                    >
+                      <Save size={14} className={isPushing ? 'animate-pulse' : ''} />
+                      {isPushing ? 'Pushing...' : 'Push to Cloud'}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="bg-orange-50 p-4 rounded-2xl mb-6 border border-orange-100">
