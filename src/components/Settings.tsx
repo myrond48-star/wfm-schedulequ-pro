@@ -19,12 +19,42 @@ import {
   AlertCircle,
   Briefcase,
   Moon,
-  Sun
+  Sun,
+  RefreshCw
 } from 'lucide-react';
 
 export const Settings: React.FC = () => {
-  const { settings, updateSettings } = useAppStore();
+  const { settings, updateSettings, syncSettingsFromDB } = useAppStore();
   const [activeTab, setActiveTab] = useState('api');
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // Sync back local state if global settings change (e.g. from Cloud Sync)
+  React.useEffect(() => {
+    setUrl(settings.apiUrl);
+    setKey(settings.apiKey);
+    setChannels(settings.channels.join(', '));
+    setShifts(Object.entries(settings.shifts).map(([k, v]) => ({ code: k, ...(v as any) })));
+    setHolidays(Object.entries(settings.holidays).map(([k, v]) => ({ date: k, desc: v })));
+    setFridayBreak(settings.fridayBreak);
+    setPuasa(settings.puasa);
+    setPuasaShifts(settings.puasaShifts);
+    setRoles(settings.roles);
+    setBizRules(settings.bizRules);
+    
+    // Auto break strings need special handling
+    const res: Record<string, string> = {};
+    Object.keys(settings.shifts).forEach(code => {
+      res[code] = (settings.autoBreak[code] || []).join(', ');
+    });
+    setAutoBreakStrings(res);
+  }, [settings]);
+
+  const handleRefreshFromCloud = async () => {
+    setIsSyncing(true);
+    await syncSettingsFromDB();
+    setIsSyncing(false);
+    showStatus("Settings refreshed from Cloud! ☁️");
+  };
   
   // API State
   const [url, setUrl] = useState(settings.apiUrl);
@@ -429,6 +459,24 @@ export const Settings: React.FC = () => {
 
             {activeTab === 'api' && (
               <div className="animate-in fade-in slide-in-from-top-4 duration-300">
+                <div className="bg-indigo-50 p-6 rounded-3xl mb-8 border border-indigo-100 flex items-center justify-between">
+                  <div>
+                    <h4 className="m-0 mb-1 text-indigo-800 text-sm font-black flex items-center gap-2">
+                      <Globe size={18} />
+                      CLOUD CONFIGURATION
+                    </h4>
+                    <p className="text-[10px] text-indigo-600 font-medium max-w-md">By configuring Supabase, your business rules, shifts, holidays, and role settings are automatically synced to the cloud and available across all browsers.</p>
+                  </div>
+                  <button 
+                    onClick={handleRefreshFromCloud}
+                    disabled={isSyncing}
+                    className={`px-4 py-2 rounded-xl text-[10px] font-bold flex items-center gap-2 transition-all ${isSyncing ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-white text-indigo-600 hover:bg-indigo-600 hover:text-white shadow-sm'}`}
+                  >
+                    <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
+                    {isSyncing ? 'Syncing...' : 'Refresh from Cloud'}
+                  </button>
+                </div>
+
                 <div className="bg-orange-50 p-4 rounded-2xl mb-6 border border-orange-100">
                   <p className="text-xs text-orange-700 m-0 font-bold flex items-center gap-2">
                     <AlertCircle size={16} />
