@@ -63,7 +63,7 @@ export const SwapModal: React.FC<SwapModalProps> = ({ onClose, channel, date }) 
       <div className="bg-white p-6 rounded-2xl w-full max-w-[480px] shadow-2xl overflow-y-auto max-h-[90vh]">
         <div className="text-center mb-5">
           <h3 className="m-0 text-slate-800 text-xl font-bold">🔄 Shift Swap Request</h3>
-          <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed px-5">Please ensure you have received approval from your TL & OM before submitting.</p>
+          <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed px-5">Please ensure you have received approval from your Manager before submitting.</p>
         </div>
 
         <div className="flex bg-slate-100 p-1 rounded-xl mb-6">
