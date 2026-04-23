@@ -1,21 +1,38 @@
-export const getDbCredentials = () => {
-  const envUrl = (import.meta as any).env.VITE_SUPABASE_URL;
-  const envKey = (import.meta as any).env.VITE_SUPABASE_KEY;
-  
-  console.log('DEBUG: Environment URL:', envUrl);
-  console.log('DEBUG: Environment KEY:', envKey ? '***PRESENT***' : '***MISSING***');
+export const fetchConfig = async () => {
+  try {
+    const response = await fetch('/api/config');
+    const data = await response.json();
+    if (data.url && data.key) {
+      localStorage.setItem('SUPABASE_URL', data.url);
+      localStorage.setItem('SUPABASE_KEY', data.key);
+      return data;
+    }
+  } catch (e) {
+    console.error("Failed to fetch server config", e);
+  }
+  return { url: '', key: '' };
+};
 
-  let url = envUrl || localStorage.getItem('SUPABASE_URL') || '';
-  const key = envKey || localStorage.getItem('SUPABASE_KEY') || '';
+export const getDbCredentials = () => {
+  const url = localStorage.getItem('SUPABASE_URL') || '';
+  const key = localStorage.getItem('SUPABASE_KEY') || '';
   
   // Clean up user input just in case they added /rest/v1 or trailing slashes
-  url = url.replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
+  const cleanedUrl = url.replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
   
-  return { url, key };
+  return { url: cleanedUrl, key };
 };
 
 export const callSupabaseAPI = async (tableName: string, method: string, payload?: any, queryStr = '') => {
-  const { url, key } = getDbCredentials();
+  let { url, key } = getDbCredentials();
+  
+  if (!url || !key) {
+    // Try fetching from server API once
+    const config = await fetchConfig();
+    url = config.url.replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
+    key = config.key;
+  }
+  
   if (!url || !key) throw new Error("Database API not configured! Please provide URL and Key in System Settings.");
 
   const headers: Record<string, string> = {
