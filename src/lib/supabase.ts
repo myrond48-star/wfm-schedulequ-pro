@@ -35,9 +35,9 @@ export const callSupabaseAPI = async (tableName: string, method: string, payload
   
   if (!response.ok) {
     const errText = await response.text();
-    // If table not found (404) and it's a GET request, return empty array instead of throwing
+    // If table not found (404) and it's a GET request, return empty array silently (optional tables)
     if (response.status === 404 && method.toUpperCase() === 'GET') {
-      console.warn(`Table ${tableName} not found, returning empty array.`);
+      console.info(`Table ${tableName} not found in database. Using local defaults if available.`);
       return [];
     }
     throw new Error(`Supabase API Error (${response.status}): ${errText}`);

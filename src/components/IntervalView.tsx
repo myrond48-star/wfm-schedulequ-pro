@@ -125,19 +125,22 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
     const fetchData = async () => {
       setLoading(true);
       try {
-        const [res, tlRes, demoRes, reqRes, reasonsRes] = await Promise.all([
+        const [res, demoRes, reqRes, reasonsRes, forRes] = await Promise.all([
           callSupabaseAPI('wfm_schedules', 'GET', undefined, `?date=eq.${date}&channel=eq.${encodeURIComponent(channel)}&select=*`),
-          callSupabaseAPI('wfm_agents', 'GET', undefined, `?role=eq.Leader&select=nama`),
           callSupabaseAPI('wfm_agents', 'GET', undefined, `?select=nik,religion,gender`),
           callSupabaseAPI('wfm_requirements', 'GET', undefined, `?date=eq.${date}&channel=eq.${encodeURIComponent(channel)}&select=requirements`).catch(() => null),
-          callSupabaseAPI('wfm_activity_reasons', 'GET', undefined, `?date_str=eq.${date}&select=*`).catch(() => null)
+          callSupabaseAPI('wfm_activity_reasons', 'GET', undefined, `?date_str=eq.${date}&select=*`).catch(() => null),
+          callSupabaseAPI('wfm_traffic_forecast', 'GET', undefined, `?channel=eq.${channel}&timestamp=gte.${date}T00:00:00Z&timestamp=lte.${date}T23:59:59Z&type=eq.interval_agents&select=timestamp,volume`).catch(() => null)
         ]);
 
-        if (res) setData(res);
-        else setData([]);
-
-        if (tlRes) {
-          setLeaders(Array.from(new Set(tlRes.map((t: any) => t.nama))));
+        if (res) {
+          setData(res);
+          // Derived leaders from schedule
+          const scheduleLeaders = Array.from(new Set(res.map((r: any) => r.tl).filter(Boolean))).sort() as string[];
+          setLeaders(scheduleLeaders);
+        } else {
+          setData([]);
+          setLeaders([]);
         }
 
         if (demoRes) {
@@ -150,6 +153,16 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
 
         if (reqRes && reqRes[0]?.requirements) {
           setReqs(reqRes[0].requirements);
+        } else if (forRes && forRes.length > 0) {
+          const fReqs = Array(96).fill(0);
+          forRes.forEach((item: any) => {
+            const dt = new Date(item.timestamp);
+            const hour = dt.getUTCHours();
+            const min = dt.getUTCMinutes();
+            const idx = hour * 4 + Math.floor(min / 15);
+            if (idx >= 0 && idx < 96) fReqs[idx] = item.volume || 0;
+          });
+          setReqs(fReqs);
         } else {
           setReqs(Array(96).fill(0));
         }
@@ -724,12 +737,12 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
                 <th className="sticky top-[64px] left-[270px] z-[110] bg-white w-[90px] h-[32px] text-left pl-3 text-[9px] text-slate-600 font-semibold border-b border-slate-200">COVERAGE GAP</th>
                 {actuals.map((v, i) => {
                   const gap = v - reqs[i];
-                  const gapClass = gap < 0 ? 'bg-rose-50 text-rose-600 font-semibold' : gap > 0 ? 'bg-green-50 text-green-600 font-semibold' : '';
+                  const gapClass = gap < 0 ? 'bg-red-50 text-red-600 font-semibold' : gap > 0 ? 'bg-green-50 text-green-600 font-semibold' : '';
                   return (
                     <th 
                       key={i} 
                       className={`sticky top-[64px] z-[100] bg-white min-w-[18px] w-[18px] text-[9px] text-slate-700 font-medium border-b border-slate-200 ${gapClass}`}
-                      onMouseEnter={(e) => handleMouseEnter(e, <div className={`font-bold ${gap < 0 ? 'text-rose-300' : 'text-green-300'}`}>Gap: {gap > 0 ? '+' : ''}{gap}</div>)}
+                      onMouseEnter={(e) => handleMouseEnter(e, <div className={`font-bold ${gap < 0 ? 'text-red-300' : 'text-green-300'}`}>Gap: {gap > 0 ? '+' : ''}{gap}</div>)}
                       onMouseMove={handleMouseMove}
                       onMouseLeave={handleMouseLeave}
                     >

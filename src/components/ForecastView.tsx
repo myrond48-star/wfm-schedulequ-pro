@@ -2695,7 +2695,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
         </div>
       )}
 
-      <div className="flex-1 overflow-auto p-6 scrollbar-thin">
+      <div className="flex-1 overflow-auto p-4 sm:p-6 scrollbar-thin">
         {activeTab === "forecast_gen" ? (
           <div className="flex flex-col gap-6 max-w-7xl mx-auto">
             {/* Controls */}
@@ -4894,12 +4894,12 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
             </div>
           </div>
         ) : activeTab === "historical" ? (
-          <div className="flex flex-col gap-8 max-w-7xl mx-auto pb-20">
+          <div className="flex flex-col gap-8 max-w-7xl mx-auto pb-20 w-full min-w-0">
             {/* Historical Header & Controls */}
-            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-              <div className="flex items-center justify-between mb-6">
+            <div className="bg-white p-4 sm:p-6 rounded-3xl border border-slate-200 shadow-sm">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 mb-6">
                 <div className="flex items-center gap-3">
-                  <div className="p-2 bg-indigo-50 rounded-xl text-indigo-600">
+                  <div className="p-2 bg-indigo-50 rounded-xl text-indigo-600 flex-shrink-0">
                     <TableIcon size={18} />
                   </div>
                   <div>
@@ -4912,36 +4912,36 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-4">
+                <div className="flex flex-wrap items-center gap-3 sm:gap-4">
                   <div className="flex items-center gap-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase">
+                    <label className="text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase whitespace-nowrap">
                       From:
                     </label>
                     <input
                       type="date"
                       value={histStartDate}
                       onChange={(e) => setHistStartDate(e.target.value)}
-                      className="p-2 border border-slate-200 rounded-xl text-[10px] font-bold outline-none focus:border-indigo-500 bg-slate-50"
+                      className="p-2 border border-slate-200 rounded-xl text-[10px] font-bold outline-none focus:border-indigo-500 bg-slate-50 w-[110px] sm:w-[130px]"
                     />
                   </div>
                   <div className="flex items-center gap-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase">
+                    <label className="text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase whitespace-nowrap">
                       To:
                     </label>
                     <input
                       type="date"
                       value={histEndDate}
                       onChange={(e) => setHistEndDate(e.target.value)}
-                      className="p-2 border border-slate-200 rounded-xl text-[10px] font-bold outline-none focus:border-indigo-500 bg-slate-50"
+                      className="p-2 border border-slate-200 rounded-xl text-[10px] font-bold outline-none focus:border-indigo-500 bg-slate-50 w-[110px] sm:w-[130px]"
                     />
                   </div>
-                  <div className="h-8 w-px bg-slate-100 mx-2" />
-                  <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
+                  <div className="hidden sm:block h-6 sm:h-8 w-px bg-slate-100 mx-1 sm:mx-2" />
+                  <div className="flex bg-slate-100 p-1 rounded-xl gap-0.5 sm:gap-1">
                     {[15, 30, 60].map((size) => (
                       <button
                         key={size}
                         onClick={() => setHistIntervalSize(size as any)}
-                        className={`px-3 py-1 rounded-lg text-[10px] font-black transition-all ${
+                        className={`px-2 sm:px-3 py-1 rounded-lg text-[9px] sm:text-[10px] font-black transition-all ${
                           histIntervalSize === size
                             ? "bg-white text-indigo-600 shadow-sm"
                             : "text-slate-400 hover:text-slate-600"
@@ -4951,7 +4951,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                       </button>
                     ))}
                   </div>
-                  <div className="h-8 w-px bg-slate-100 mx-2" />
+                  <div className="hidden sm:block h-6 sm:h-8 w-px bg-slate-100 mx-1 sm:mx-2" />
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => {
@@ -4962,26 +4962,26 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                         });
                         setShowDeleteForecastModal(true);
                       }}
-                      className="px-3 py-1.5 bg-rose-50 text-rose-600 rounded-lg text-[10px] font-bold border border-rose-100 hover:bg-rose-100 transition-all flex items-center gap-2 whitespace-nowrap"
+                      className="px-2 sm:px-3 py-1.5 bg-rose-50 text-rose-600 rounded-lg text-[9px] sm:text-[10px] font-bold border border-rose-100 hover:bg-rose-100 transition-all flex items-center gap-1 sm:gap-2 whitespace-nowrap"
                     >
-                      <Trash2 size={12} />
-                      Forecast
+                      <Trash2 size={11} />
+                      <span className="hidden sm:inline">Clear</span> Forecast
                     </button>
                     <button 
                       onClick={() => {
                         setDeleteRange({ start: histStartDate, end: histEndDate });
                         setShowDeleteModal(true);
                       }}
-                      className="px-3 py-1.5 bg-slate-50 text-slate-600 rounded-lg text-[10px] font-bold border border-slate-200 hover:bg-slate-100 transition-all flex items-center gap-2 border-dashed whitespace-nowrap"
+                      className="px-2 sm:px-3 py-1.5 bg-slate-50 text-slate-600 rounded-lg text-[9px] sm:text-[10px] font-bold border border-slate-200 hover:bg-slate-100 transition-all flex items-center gap-1 sm:gap-2 border-dashed whitespace-nowrap"
                     >
-                      <Trash2 size={12} />
-                      Actuals
+                      <Trash2 size={11} />
+                      <span className="hidden sm:inline">Clear</span> Actuals
                     </button>
                   </div>
-                  <div className="h-8 w-px bg-slate-100 mx-2" />
+                  <div className="hidden lg:block h-8 w-px bg-slate-100 mx-2" />
                   <button
                     onClick={() => setShowImportModal(true)}
-                    className="px-4 py-1.5 bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-lg text-[10px] font-bold hover:bg-emerald-100 transition-all flex items-center gap-2 whitespace-nowrap"
+                    className="px-3 sm:px-4 py-1.5 bg-emerald-600 text-white border border-emerald-600 rounded-lg text-[9px] sm:text-[10px] font-black hover:bg-emerald-700 transition-all flex items-center gap-2 whitespace-nowrap shadow-md shadow-emerald-100 ml-auto lg:ml-0"
                   >
                     <FileUp size={12} />
                     Import Data

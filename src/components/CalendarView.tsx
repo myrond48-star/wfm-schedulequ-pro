@@ -2,9 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../lib/store';
 import { callSupabaseAPI } from '../lib/supabase';
 import { format, addDays, parseISO } from 'date-fns';
-import { FileUp, Trash2, Calendar } from 'lucide-react';
+import { FileUp, Trash2, Calendar, FileSpreadsheet } from 'lucide-react';
 import { ImportScheduleModal } from './modals/ImportScheduleModal';
 import { DeleteRangeModal } from './modals/DeleteRangeModal';
+import * as XLSX from 'xlsx';
 
 interface CalendarViewProps {
   channel: string;
@@ -112,6 +113,47 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ channel, startDate, 
       const weightB = settings.shifts[shiftCodeB]?.w || 99;
       return weightA - weightB || (a.nama || '').localeCompare(b.nama || '');
     });
+
+  const exportToExcel = () => {
+    if (agents.length === 0) return;
+
+    try {
+      const exportData = agents.map(agent => {
+        const row: any = {
+          'NIK': agent.nik,
+          'Name': agent.nama,
+          'Team Leader': agent.tl
+        };
+        dates.forEach(date => {
+          row[date] = agent.shifts[date]?.code || '-';
+        });
+        return row;
+      });
+
+      const worksheet = XLSX.utils.json_to_sheet(exportData);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Schedule");
+      
+      const maxWidths = exportData.reduce((acc, row) => {
+        Object.keys(row).forEach((key, i) => {
+          const val = String(row[key]);
+          acc[i] = Math.max(acc[i] || 0, val.length, key.length);
+        });
+        return acc;
+      }, [] as number[]);
+      worksheet["!cols"] = maxWidths.map(w => ({ wch: w + 2 }));
+
+      XLSX.writeFile(workbook, `Schedule_${channel}_${startDate}_to_${endDate}.xlsx`);
+    } catch (error) {
+      console.error("Export error:", error);
+    }
+  };
+
+  useEffect(() => {
+    const handleExport = () => exportToExcel();
+    window.addEventListener('wfm-calendar-export', handleExport);
+    return () => window.removeEventListener('wfm-calendar-export', handleExport);
+  }, [agents, dates, channel, startDate, endDate]);
 
   // Summary calculation per date
   const summary: Record<string, any> = {};
