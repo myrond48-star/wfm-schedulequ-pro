@@ -13,6 +13,11 @@ async function startServer() {
   const PORT = 3000;
 
   // API routes FIRST
+  app.use((req, res, next) => {
+    console.log(`REQ: ${req.method} ${req.url}`);
+    next();
+  });
+  
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
   });
