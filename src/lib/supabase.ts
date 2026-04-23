@@ -1,39 +1,21 @@
-export const fetchConfig = async () => {
-  try {
-    const response = await fetch('/api/config');
-    const data = await response.json();
-    if (data.url && data.key) {
-      localStorage.setItem('SUPABASE_URL', data.url);
-      localStorage.setItem('SUPABASE_KEY', data.key);
-      return data;
-    }
-  } catch (e) {
-    console.error("Failed to fetch server config", e);
-  }
-  return { url: '', key: '' };
-};
-
 export const getDbCredentials = () => {
-  const url = localStorage.getItem('SUPABASE_URL') || '';
-  const key = localStorage.getItem('SUPABASE_KEY') || '';
+  // Priority 1: Check actual Vite environment variables (baked in at build time)
+  // Priority 2: Check Local Storage (set by user or previous sessions)
   
-  // Clean up user input just in case they added /rest/v1 or trailing slashes
+  const url = import.meta.env.VITE_SUPABASE_URL || localStorage.getItem('SUPABASE_URL') || '';
+  const key = import.meta.env.VITE_SUPABASE_KEY || localStorage.getItem('SUPABASE_KEY') || '';
+  
   const cleanedUrl = url.replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
   
   return { url: cleanedUrl, key };
 };
 
 export const callSupabaseAPI = async (tableName: string, method: string, payload?: any, queryStr = '') => {
-  let { url, key } = getDbCredentials();
+  const { url, key } = getDbCredentials();
   
   if (!url || !key) {
-    // Try fetching from server API once
-    const config = await fetchConfig();
-    url = config.url.replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
-    key = config.key;
+    throw new Error("Database API not configured! Please provide URL and Key in System Settings.");
   }
-  
-  if (!url || !key) throw new Error("Database API not configured! Please provide URL and Key in System Settings.");
 
   const headers: Record<string, string> = {
     'apikey': key,
@@ -58,9 +40,7 @@ export const callSupabaseAPI = async (tableName: string, method: string, payload
   
   if (!response.ok) {
     const errText = await response.text();
-    // If table not found (404) and it's a GET request, return empty array silently (optional tables)
     if (response.status === 404 && method.toUpperCase() === 'GET') {
-      console.info(`Table ${tableName} not found in database. Using local defaults if available.`);
       return [];
     }
     throw new Error(`Supabase API Error (${response.status}): ${errText}`);
