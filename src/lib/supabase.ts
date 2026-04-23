@@ -1,6 +1,12 @@
 export const getDbCredentials = () => {
-  let url = (import.meta as any).env.VITE_SUPABASE_URL || localStorage.getItem('SUPABASE_URL') || '';
-  const key = (import.meta as any).env.VITE_SUPABASE_KEY || localStorage.getItem('SUPABASE_KEY') || '';
+  const envUrl = (import.meta as any).env.VITE_SUPABASE_URL;
+  const envKey = (import.meta as any).env.VITE_SUPABASE_KEY;
+  
+  console.log('DEBUG: Environment URL:', envUrl);
+  console.log('DEBUG: Environment KEY:', envKey ? '***PRESENT***' : '***MISSING***');
+
+  let url = envUrl || localStorage.getItem('SUPABASE_URL') || '';
+  const key = envKey || localStorage.getItem('SUPABASE_KEY') || '';
   
   // Clean up user input just in case they added /rest/v1 or trailing slashes
   url = url.replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
