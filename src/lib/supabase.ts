@@ -2,8 +2,8 @@ export const getDbCredentials = () => {
   // Priority 1: Check actual Vite environment variables (baked in at build time)
   // Priority 2: Check Local Storage (set by user or previous sessions)
   
-  const url = import.meta.env.VITE_SUPABASE_URL || localStorage.getItem('SUPABASE_URL') || '';
-  const key = import.meta.env.VITE_SUPABASE_KEY || localStorage.getItem('SUPABASE_KEY') || '';
+  const url = (import.meta as any).env.VITE_SUPABASE_URL || localStorage.getItem('SUPABASE_URL') || '';
+  const key = (import.meta as any).env.VITE_SUPABASE_KEY || localStorage.getItem('SUPABASE_KEY') || '';
   
   const cleanedUrl = url.replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
   
@@ -23,7 +23,7 @@ export const callSupabaseAPI = async (tableName: string, method: string, payload
     'Content-Type': 'application/json',
   };
 
-  if (method.toLowerCase() === 'post') {
+  if (method.toLowerCase() === 'post' || method.toLowerCase() === 'delete' || method.toLowerCase() === 'patch') {
     headers['Prefer'] = 'return=minimal';
   }
 

@@ -293,6 +293,17 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
         date_str: date, nik: nik, interval_idx: colIdx,
         activity_code: type, reason: reasonText, count: duration
       });
+
+      // Notify
+      window.dispatchEvent(new CustomEvent('wfm-notify', {
+        detail: {
+          title: 'Activity Added',
+          message: `Reason for "${type}" added for ${row.nama}`,
+          type: 'info',
+          category: 'activity',
+          targetNik: nik
+        }
+      }));
     } catch (err) {
       console.error("Failed to save reason:", err);
     }

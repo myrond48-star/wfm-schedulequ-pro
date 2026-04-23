@@ -7,6 +7,7 @@ import { ForecastView } from './ForecastView';
 import { UsersDB } from './UsersDB';
 import { Settings } from './Settings';
 import { AboutView } from './AboutView';
+import { MyTimeView } from './MyTimeView';
 import { SwapModal } from './modals/SwapModal';
 import { ApprovalModal } from './modals/ApprovalModal';
 import { PublishModal } from './modals/PublishModal';
@@ -23,6 +24,7 @@ import {
   TrendingUp,
   LineChart,
   Users, 
+  Clock4,
   ChevronDown,
   FileUp,
   Trash2,
@@ -44,7 +46,7 @@ import { motion, AnimatePresence } from 'motion/react';
 
 export const Dashboard: React.FC = () => {
   const { user, logout, settings } = useAppStore();
-  const [currentView, setCurrentView] = useState<'interval' | 'calendar' | 'adherence' | 'forecast' | 'users' | 'settings' | 'about'>('interval');
+  const [currentView, setCurrentView] = useState<'interval' | 'calendar' | 'adherence' | 'forecast' | 'users' | 'settings' | 'about' | 'mytime'>('interval');
   const [channel, setChannel] = useState(user?.channel || 'Call');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [sortBy, setSortBy] = useState('interval');
@@ -55,6 +57,7 @@ export const Dashboard: React.FC = () => {
   const [startDate, setStartDate] = useState(format(startOfMonth(today), 'yyyy-MM-dd'));
   const [endDate, setEndDate] = useState(format(endOfMonth(today), 'yyyy-MM-dd'));
   
+  const [myTimeTab, setMyTimeTab] = useState<'personal' | 'request_calendar' | 'request_list'>('personal');
   const [showSwap, setShowSwap] = useState(false);
   const [showApproval, setShowApproval] = useState(false);
   const [showPublish, setShowPublish] = useState(false);
@@ -62,6 +65,18 @@ export const Dashboard: React.FC = () => {
   const [showDeleteRange, setShowDeleteRange] = useState(false);
   const [showReportAdh, setShowReportAdh] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [notifications, setNotifications] = useState<{ 
+    id: string; 
+    title: string; 
+    message: string; 
+    timestamp: Date; 
+    type: 'info' | 'success' | 'warning';
+    category?: 'swap' | 'manual_shift' | 'publish' | 'activity';
+    targetNik?: string;
+    targetTl?: string;
+    isPublic?: boolean;
+  }[]>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
   const [leaders, setLeaders] = useState<string[]>([]);
 
   const userRole = user?.role || 'Agent';
@@ -75,6 +90,38 @@ export const Dashboard: React.FC = () => {
                     user?.username === 'admin';
   const ui = roleConf.allowedUI || [];
   
+  React.useEffect(() => {
+    const handleImportTrigger = () => setShowImport(true);
+    const handleDeleteTrigger = () => setShowDeleteRange(true);
+    const handleRefresh = () => setRefreshKey(prev => prev + 1);
+    const handleNotify = (e: any) => {
+      const { title, message, type, category, targetNik, targetTl, isPublic } = e.detail;
+      setNotifications(prev => [{
+        id: Math.random().toString(36).substr(2, 9),
+        title,
+        message,
+        timestamp: new Date(),
+        type: type || 'info',
+        category,
+        targetNik,
+        targetTl,
+        isPublic
+      }, ...prev].slice(0, 30));
+    };
+    
+    window.addEventListener('wfm-trigger-import', handleImportTrigger);
+    window.addEventListener('wfm-trigger-delete-range', handleDeleteTrigger);
+    window.addEventListener('wfm-refresh', handleRefresh);
+    window.addEventListener('wfm-notify', handleNotify);
+    
+    return () => {
+      window.removeEventListener('wfm-trigger-import', handleImportTrigger);
+      window.removeEventListener('wfm-trigger-delete-range', handleDeleteTrigger);
+      window.removeEventListener('wfm-refresh', handleRefresh);
+      window.removeEventListener('wfm-notify', handleNotify);
+    };
+  }, []);
+
   React.useEffect(() => {
     const fetchLeaders = async () => {
       try {
@@ -104,38 +151,27 @@ export const Dashboard: React.FC = () => {
 
   const [showViewDropdown, setShowViewDropdown] = useState(false);
   const [showActionsDropdown, setShowActionsDropdown] = useState(false);
-  const [showNotifDropdown, setShowNotifDropdown] = useState(false);
 
   // Hover refs to prevent flickering
   const viewTimeout = useRef<any>(null);
   const actionTimeout = useRef<any>(null);
-  const notifTimeout = useRef<any>(null);
 
-  const handleHover = (type: 'view' | 'action' | 'notif', enter: boolean) => {
+  const handleHover = (type: 'view' | 'action', enter: boolean) => {
     if (enter) {
       if (type === 'view') {
         if (viewTimeout.current) clearTimeout(viewTimeout.current);
         setShowViewDropdown(true);
         setShowActionsDropdown(false);
-        setShowNotifDropdown(false);
       } else if (type === 'action') {
         if (actionTimeout.current) clearTimeout(actionTimeout.current);
         setShowActionsDropdown(true);
         setShowViewDropdown(false);
-        setShowNotifDropdown(false);
-      } else if (type === 'notif') {
-        if (notifTimeout.current) clearTimeout(notifTimeout.current);
-        setShowNotifDropdown(true);
-        setShowViewDropdown(false);
-        setShowActionsDropdown(false);
       }
     } else {
       if (type === 'view') {
         viewTimeout.current = setTimeout(() => setShowViewDropdown(false), 200);
       } else if (type === 'action') {
         actionTimeout.current = setTimeout(() => setShowActionsDropdown(false), 200);
-      } else if (type === 'notif') {
-        notifTimeout.current = setTimeout(() => setShowNotifDropdown(false), 200);
       }
     }
   };
@@ -157,7 +193,6 @@ export const Dashboard: React.FC = () => {
               onClick={() => {
                 setShowViewDropdown(!showViewDropdown);
                 setShowActionsDropdown(false);
-                setShowNotifDropdown(false);
               }}
               className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl cursor-pointer text-[10px] sm:text-xs font-semibold border border-slate-200 bg-indigo-600 text-white hover:bg-indigo-700 transition-colors flex items-center gap-1.5 min-w-[70px] sm:min-w-[90px] justify-between"
             >
@@ -199,6 +234,14 @@ export const Dashboard: React.FC = () => {
                         Calendar
                       </motion.button>
                     )}
+                    <motion.button 
+                      whileHover={{ x: 4 }}
+                      onClick={() => { setCurrentView('mytime'); setShowViewDropdown(false); }} 
+                      className={`p-2 sm:p-2.5 border-none bg-transparent cursor-pointer text-[10px] sm:text-xs font-normal text-left rounded-lg flex items-center gap-2 transition-colors duration-200 hover:bg-slate-50 ${currentView === 'mytime' ? 'text-indigo-600 bg-indigo-50/50' : 'text-slate-600'}`}
+                    >
+                      <Clock4 size={13} />
+                      My Time
+                    </motion.button>
                     {(masterKey || ui.includes('viewAdh')) && (
                       <motion.button 
                         whileHover={{ x: 4 }}
@@ -253,7 +296,7 @@ export const Dashboard: React.FC = () => {
 
         {/* Center: Context Filters (Scrollable on small screens) */}
         <div className="flex-1 flex overflow-x-auto sm:overflow-visible pb-0.5 sm:pb-0 gap-1.5 items-center scrollbar-none sm:scrollbar-thin">
-          {currentView !== 'users' && currentView !== 'settings' && currentView !== 'about' && (
+          {currentView !== 'users' && currentView !== 'settings' && currentView !== 'about' && !(currentView === 'mytime' && myTimeTab === 'personal') && (
             <select 
               value={channel} 
               onChange={(e) => setChannel(e.target.value)}
@@ -265,7 +308,7 @@ export const Dashboard: React.FC = () => {
             </select>
           )}
 
-          {currentView === 'calendar' && (
+          {(currentView === 'calendar' || (currentView === 'mytime' && myTimeTab !== 'personal')) && (
             <div className="flex items-center gap-1 flex-shrink-0">
               <input 
                 type="date" 
@@ -283,7 +326,7 @@ export const Dashboard: React.FC = () => {
             </div>
           )}
 
-          {currentView !== 'calendar' && currentView !== 'users' && currentView !== 'forecast' && currentView !== 'settings' && currentView !== 'about' && (
+          {currentView !== 'calendar' && currentView !== 'users' && currentView !== 'forecast' && currentView !== 'settings' && currentView !== 'about' && currentView !== 'mytime' && (
             <input 
               type="date" 
               value={date} 
@@ -292,9 +335,9 @@ export const Dashboard: React.FC = () => {
             />
           )}
 
-          {currentView !== 'forecast' && currentView !== 'settings' && currentView !== 'about' && (
+          {currentView !== 'forecast' && currentView !== 'settings' && currentView !== 'about' && !(currentView === 'mytime' && myTimeTab === 'personal') && (
             <>
-              {currentView !== 'users' && (
+              {currentView !== 'users' && currentView !== 'mytime' && (
                 <>
                   <select 
                     value={sortBy} 
@@ -304,7 +347,9 @@ export const Dashboard: React.FC = () => {
                     <option value="interval">Sort: Intv</option>
                     <option value="nama">Sort: Name</option>
                   </select>
-
+                </>
+              )}
+              {currentView !== 'users' && (
                   <select 
                     value={filterTL} 
                     onChange={(e) => setFilterTL(e.target.value)}
@@ -315,10 +360,9 @@ export const Dashboard: React.FC = () => {
                       <option key={l} value={l}>{l}</option>
                     ))}
                   </select>
-                </>
               )}
 
-              {currentView !== 'about' && (
+              {currentView !== 'about' && !(currentView === 'mytime' && myTimeTab === 'personal') && (
                 <div className="relative flex-shrink-0">
                   <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 sm:w-[14px] sm:h-[14px] sm:left-2.5" />
                   <input 
@@ -332,7 +376,7 @@ export const Dashboard: React.FC = () => {
               )}
 
               {/* Actions Dropdown (Moved after Search) */}
-              {(masterKey || ui.includes('btnAct')) && currentView !== 'users' && currentView !== 'forecast' && currentView !== 'settings' && currentView !== 'about' && (
+              {(masterKey || ui.includes('btnAct')) && currentView !== 'users' && currentView !== 'forecast' && currentView !== 'settings' && currentView !== 'about' && currentView !== 'mytime' && (
                 <div 
                   className="relative"
                   onMouseEnter={() => handleHover('action', true)}
@@ -342,7 +386,6 @@ export const Dashboard: React.FC = () => {
                     onClick={() => {
                       setShowActionsDropdown(!showActionsDropdown);
                       setShowViewDropdown(false);
-                      setShowNotifDropdown(false);
                     }}
                     className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl cursor-pointer text-[10px] sm:text-xs font-semibold border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors flex items-center gap-1.5 min-w-[70px] sm:min-w-[90px] justify-between"
                   >
@@ -374,6 +417,8 @@ export const Dashboard: React.FC = () => {
                           <RefreshCw size={13} className="text-slate-500" />
                           Refresh Data
                         </motion.button>
+
+                        {/* Admin Specific: Import & Delete - REMOVED per user request */}
 
                         {/* Shared: Swap Shift (Interval & Calendar) */}
                         {(currentView === 'interval' || currentView === 'calendar') && (masterKey || ui.includes('btnSwp')) && (
@@ -468,42 +513,114 @@ export const Dashboard: React.FC = () => {
 
         </div>
 
-        {/* Right Side: Notif & User */}
+        {/* Right Side: User Profile */}
         <div className="flex items-center gap-2 border-t sm:border-t-0 pt-1.5 sm:pt-0 border-slate-100 lg:ml-auto justify-between lg:justify-end flex-shrink-0">
-          {/* Notifications */}
-          <div 
-            className="relative"
-            onMouseEnter={() => handleHover('notif', true)}
-            onMouseLeave={() => handleHover('notif', false)}
-          >
+          
+          {/* Notification Bell */}
+          <div className="relative mr-2">
             <button 
-              onClick={() => {
-                setShowNotifDropdown(!showNotifDropdown);
-                setShowViewDropdown(false);
-                setShowActionsDropdown(false);
-              }}
-              className="p-2 border-none bg-slate-100 rounded-xl cursor-pointer text-slate-600 relative hover:bg-slate-200 transition-all"
+              onClick={() => setShowNotifications(!showNotifications)}
+              className={`p-2 rounded-xl transition-all relative ${showNotifications ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
             >
               <Bell size={18} />
-              <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[9px] font-bold px-1 py-0.5 rounded-full border-2 border-white">
-                0
-              </span>
+              {notifications.length > 0 && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-rose-500 rounded-full border-2 border-white"></span>
+              )}
             </button>
-            
-            {showNotifDropdown && (
-              <>
-                <div className="fixed inset-0 z-[999] lg:hidden" onClick={() => setShowNotifDropdown(false)}></div>
-                <div className="absolute flex flex-col bg-white w-[280px] shadow-2xl rounded-2xl z-[1001] top-full mt-2 right-0 border border-slate-100 overflow-hidden">
-                  <div className="p-3.5 font-bold border-b border-slate-100 bg-slate-50/50 text-[11px] text-slate-800 uppercase tracking-wider">
-                    📬 Swap Notifications
-                  </div>
-                  <div className="p-6 flex flex-col items-center justify-center gap-2 text-slate-400">
-                    <Send size={24} className="opacity-20" />
-                    <p className="text-[10px] font-medium italic">No swap requests currently</p>
-                  </div>
-                </div>
-              </>
-            )}
+
+            <AnimatePresence>
+              {showNotifications && (
+                <>
+                  <div className="fixed inset-0 z-[999]" onClick={() => setShowNotifications(false)}></div>
+                  <motion.div 
+                    initial={{ opacity: 0, scale: 0.95, y: -10 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                    className="absolute right-0 top-full mt-3 w-[260px] sm:w-[300px] bg-white rounded-2xl shadow-2xl border border-slate-100 z-[1000] overflow-hidden"
+                  >
+                    <div className="p-4 border-b border-slate-50 flex items-center justify-between bg-slate-50/50">
+                      <h4 className="text-xs font-black uppercase tracking-tight text-slate-800 m-0">Recent Activity</h4>
+                      <button 
+                        onClick={() => setNotifications([])}
+                        className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 bg-transparent border-none cursor-pointer"
+                      >
+                        Clear All
+                      </button>
+                    </div>
+
+                    <div className="max-h-[350px] overflow-y-auto p-2">
+                      {notifications.filter(notif => {
+                        if (masterKey) return true;
+                        if (!user) return false;
+                        if (notif.isPublic) return true;
+                        
+                        if (notif.category === 'swap') {
+                          return user.nik === notif.targetNik || (notif as any).requesterNik === user.nik || user.nama === notif.targetTl;
+                        }
+                        if (notif.category === 'manual_shift') {
+                          return user.nik === notif.targetNik;
+                        }
+                        if (notif.category === 'activity') {
+                          return user.nik === notif.targetNik;
+                        }
+                        if (notif.category === 'publish') {
+                          return true; // Schedule updates are usually relevant to everyone
+                        }
+                        
+                        return false;
+                      }).length === 0 ? (
+                        <div className="py-10 text-center flex flex-col items-center gap-2">
+                          <div className="w-10 h-10 bg-slate-50 rounded-full flex items-center justify-center text-slate-300">
+                            <Bell size={18} />
+                          </div>
+                          <p className="text-[10px] font-bold text-slate-400 m-0 uppercase tracking-wider">No relevant activity</p>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-1">
+                          {notifications
+                            .filter(notif => {
+                              if (masterKey) return true;
+                              if (!user) return false;
+                              if (notif.isPublic) return true;
+                              
+                              if (notif.category === 'swap') {
+                                return user.nik === notif.targetNik || (notif as any).requesterNik === user.nik || user.nama === notif.targetTl;
+                              }
+                              if (notif.category === 'manual_shift') {
+                                return user.nik === notif.targetNik;
+                              }
+                              if (notif.category === 'activity') {
+                                return user.nik === notif.targetNik;
+                              }
+                              if (notif.category === 'publish') {
+                                return true;
+                              }
+                              
+                              return false;
+                            })
+                            .map(notif => (
+                              <div key={notif.id} className="p-3 rounded-xl hover:bg-slate-50 transition-colors border border-transparent hover:border-slate-100 flex flex-col gap-1">
+                                <div className="flex items-center justify-between">
+                                  <span className={`text-[10px] font-black uppercase tracking-tight ${notif.type === 'success' ? 'text-emerald-600' : notif.type === 'warning' ? 'text-amber-600' : 'text-indigo-600'}`}>
+                                    {notif.title}
+                                  </span>
+                                  <span className="text-[9px] font-bold text-slate-400">
+                                    {format(notif.timestamp, 'HH:mm')}
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-slate-600 m-0 leading-tight font-medium">
+                                  {notif.message}
+                                </p>
+                              </div>
+                            ))
+                          }
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
           </div>
 
           <div className="flex items-center gap-2">
@@ -546,6 +663,7 @@ export const Dashboard: React.FC = () => {
             {currentView === 'adherence' && <AdherenceView key={refreshKey} channel={channel} date={date} sortBy={sortBy} filterTL={filterTL} search={search} />}
             {currentView === 'forecast' && <ForecastView channel={channel} />}
             {currentView === 'users' && <UsersDB key={refreshKey} search={search} />}
+            {currentView === 'mytime' && <MyTimeView key={refreshKey} channel={channel} startDate={startDate} endDate={endDate} search={search} filterTL={filterTL} masterKey={masterKey} myTimeTab={myTimeTab} setMyTimeTab={setMyTimeTab} />}
             {currentView === 'settings' && <Settings />}
             {currentView === 'about' && <AboutView />}
           </div>

@@ -63,6 +63,7 @@ export const Login: React.FC = () => {
           role: user.role,
           channel: user.channel,
           status: user.status,
+          tl: user.tl,
         });
       } else {
         setError('Invalid Username or Password');

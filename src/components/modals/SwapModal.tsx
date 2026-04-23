@@ -49,6 +49,19 @@ export const SwapModal: React.FC<SwapModalProps> = ({ onClose, channel, date }) 
         status: 'PENDING'
       });
       
+      // Notify change
+      window.dispatchEvent(new CustomEvent('wfm-notify', {
+        detail: {
+          title: 'Swap Requested',
+          message: `Swap request from ${user?.nama} with ${target.nama}`,
+          type: 'info',
+          category: 'swap',
+          requesterNik: user?.nik,
+          targetNik: target.nik,
+          targetTl: user?.tl || target.tl
+        }
+      }));
+
       alert("Swap request submitted successfully");
       onClose();
     } catch (err: any) {

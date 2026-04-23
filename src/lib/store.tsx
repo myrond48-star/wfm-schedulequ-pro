@@ -47,6 +47,7 @@ export interface User {
   role: string;
   channel: string;
   status: string;
+  tl?: string;
 }
 
 interface AppState {
@@ -91,6 +92,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         role: localStorage.getItem('wfm_role') || '',
         channel: localStorage.getItem('wfm_channel') || '',
         status: localStorage.getItem('wfm_status') || '',
+        tl: localStorage.getItem('wfm_tl') || '',
       });
     }
     
@@ -140,6 +142,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem('wfm_role', userData.role);
     localStorage.setItem('wfm_channel', userData.channel);
     localStorage.setItem('wfm_status', userData.status);
+    if (userData.tl) localStorage.setItem('wfm_tl', userData.tl);
     setUser(userData);
   };
 
@@ -150,6 +153,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.removeItem('wfm_role');
     localStorage.removeItem('wfm_channel');
     localStorage.removeItem('wfm_status');
+    localStorage.removeItem('wfm_tl');
     setUser(null);
   };
 

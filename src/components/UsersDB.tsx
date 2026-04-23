@@ -51,6 +51,16 @@ export const UsersDB: React.FC<UsersDBProps> = ({ search }) => {
       } else {
         await callSupabaseAPI('wfm_agents', 'PATCH', form, `?nik=eq.${form.nik}`);
       }
+      
+      // Notify
+      window.dispatchEvent(new CustomEvent('wfm-notify', {
+        detail: {
+          title: modal?.isNew ? 'User Added' : 'User Updated',
+          message: `${form.nama} (${form.nik}) details updated.`,
+          type: 'success'
+        }
+      }));
+
       alert(`User ${form.nama} successfully ${modal?.isNew ? 'added' : 'updated'}!`);
       setModal(null);
       fetchUsers();
@@ -63,6 +73,16 @@ export const UsersDB: React.FC<UsersDBProps> = ({ search }) => {
     if (!confirm(`⚠️ STRICT WARNING ⚠️\n\nAre you sure you want to permanently delete agent ${nama} (${nik})?`)) return;
     try {
       await callSupabaseAPI('wfm_agents', 'DELETE', undefined, `?nik=eq.${nik}`);
+      
+      // Notify
+      window.dispatchEvent(new CustomEvent('wfm-notify', {
+        detail: {
+          title: 'User Deleted',
+          message: `Agent ${nama} was permanently removed.`,
+          type: 'warning'
+        }
+      }));
+
       alert(`User with NIK ${nik} successfully deleted permanently from the system!`);
       fetchUsers();
     } catch (err: any) {

@@ -29,8 +29,22 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({ onClose }) => {
 
   const handleApproval = async (id: number, action: 'APPROVED' | 'REJECT') => {
     if (!confirm(`Confirm ${action} for this request?`)) return;
+    const req = requests.find(r => r.id === id);
     try {
       await callSupabaseAPI('wfm_swaps', 'PATCH', { status: action }, `?id=eq.${id}`);
+      
+      // Notify
+      window.dispatchEvent(new CustomEvent('wfm-notify', {
+        detail: {
+          title: 'Request ' + action,
+          message: `Swap request between ${req?.requester_nama} and ${req?.target_nama} has been ${action.toLowerCase()}`,
+          type: action === 'APPROVED' ? 'success' : 'warning',
+          category: 'swap',
+          requesterNik: req?.requester_nik,
+          targetNik: req?.target_nik
+        }
+      }));
+
       alert(`Request ${action}`);
       fetchRequests();
     } catch (err: any) {

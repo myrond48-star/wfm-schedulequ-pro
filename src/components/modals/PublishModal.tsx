@@ -20,6 +20,16 @@ export const PublishModal: React.FC<PublishModalProps> = ({ onClose, channel, da
 
     // Simplified logic for demo
     alert(`Schedule for ${pubChannel} from ${startDate} to ${endDate} successfully ${action.toLowerCase()}ed!`);
+    
+    window.dispatchEvent(new CustomEvent('wfm-notify', {
+      detail: {
+        title: action + ' SUCCESS',
+        message: `Schedule for ${pubChannel} from ${startDate} to ${endDate} is ${action.toLowerCase()}ed.`,
+        type: 'success',
+        category: 'publish'
+      }
+    }));
+
     onClose();
   };
 

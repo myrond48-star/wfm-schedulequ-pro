@@ -25,8 +25,6 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ channel, startDate, 
   const [newShift, setNewShift] = useState('');
   const [newColor, setNewColor] = useState('#ffffff');
   const [holidays, setHolidays] = useState<Record<string, string>>({});
-  const [showImport, setShowImport] = useState(false);
-  const [showDeleteRange, setShowDeleteRange] = useState(false);
 
   const roleConf = settings.roles[user?.role || 'Agent'] || { isAdmin: false, canEditSchedule: false };
   const canEdit = roleConf.isAdmin || roleConf.canEditSchedule || user?.role === 'Admin';
@@ -210,6 +208,17 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ channel, startDate, 
           date: date, nik: row.nik, nama: row.nama, tl: row.tl, channel: channel, shift: newShift, bg_color: newColor
         });
       }
+
+      // Notify change
+      window.dispatchEvent(new CustomEvent('wfm-notify', {
+        detail: {
+          title: 'Shift Updated',
+          message: `${row.nama} shift on ${date} changed to ${newShift}`,
+          type: 'info',
+          category: 'manual_shift',
+          targetNik: row.nik
+        }
+      }));
     } catch (err) {
       console.error("Failed to update shift:", err);
     }
@@ -248,14 +257,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ channel, startDate, 
         {canEdit && (
           <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
             <button 
-              onClick={() => setShowImport(true)} 
+              onClick={() => window.dispatchEvent(new CustomEvent('wfm-trigger-import'))} 
               className="flex-1 sm:flex-none justify-center px-4 py-2 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-xl text-xs font-bold cursor-pointer hover:bg-indigo-100 transition-all flex items-center gap-2 whitespace-nowrap"
             >
               <FileUp size={14} />
               Import Schedule
             </button>
             <button 
-              onClick={() => setShowDeleteRange(true)} 
+              onClick={() => window.dispatchEvent(new CustomEvent('wfm-trigger-delete-range'))} 
               className="flex-1 sm:flex-none justify-center px-4 py-2 bg-rose-50 text-rose-600 border border-rose-100 rounded-xl text-xs font-bold cursor-pointer hover:bg-rose-100 transition-all flex items-center gap-2 whitespace-nowrap"
             >
               <Trash2 size={14} />
@@ -529,8 +538,6 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ channel, startDate, 
         </div>
       )}
 
-      {showImport && <ImportScheduleModal onClose={() => setShowImport(false)} />}
-      {showDeleteRange && <DeleteRangeModal onClose={() => setShowDeleteRange(false)} channel={channel} />}
     </div>
   );
 };
