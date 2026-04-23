@@ -19,6 +19,9 @@ async function startServer() {
 
   // Proxy to expose secrets securely to client
   app.get("/api/config", (req, res) => {
+    console.log('DEBUG SERVER: VITE_SUPABASE_URL:', process.env.VITE_SUPABASE_URL);
+    console.log('DEBUG SERVER: VITE_SUPABASE_KEY:', process.env.VITE_SUPABASE_KEY ? '***PRESENT***' : '***MISSING***');
+    
     res.json({
         url: process.env.VITE_SUPABASE_URL || "",
         key: process.env.VITE_SUPABASE_KEY || ""
