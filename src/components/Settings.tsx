@@ -162,7 +162,7 @@ export const Settings: React.FC = () => {
         }
       }
     });
-    updateSettings({ shifts: newShifts });
+    updateSettings({ shifts: newShifts, bizRules });
     showStatus("Shift Settings saved successfully! ✅");
   };
 
@@ -678,6 +678,48 @@ export const Settings: React.FC = () => {
                    <Plus size={20} />
                    Add New Shift Definition
                  </button>
+               </div>
+            </div>
+
+            <div className="bg-white p-8 rounded-[2rem] border border-slate-200 shadow-sm relative overflow-hidden">
+               <h4 className="m-0 mb-5 text-slate-900 text-base font-bold flex items-center gap-2.5 tracking-tight relative z-10">
+                 <ArrowLeftRight size={18} className="text-indigo-600" />
+                 CHANNEL SHIFT ASSIGNMENT
+               </h4>
+               <p className="text-sm text-slate-500 font-medium mb-8 relative z-10">Specify which shifts are eligible for each operational channel. This mapping filters selection in Forecast and Schedule views.</p>
+               
+               <div className="divide-y divide-slate-100 relative z-10">
+                  {settings.channels.map(ch => (
+                    <div key={ch} className="py-5 flex flex-col md:flex-row md:items-center gap-6 group/row">
+                      <div className="md:w-1/4">
+                        <div className="text-xs font-black text-slate-800 uppercase tracking-widest group-hover/row:text-indigo-600 transition-colors">{ch}</div>
+                        <div className="text-[10px] text-slate-400 font-bold mt-0.5">Assigned Shifts</div>
+                      </div>
+                      <div className="flex-1 flex flex-wrap gap-2">
+                        {shifts.map(s => {
+                          if (!s.code) return null;
+                          const currentShifts = bizRules.channelShifts?.[ch] || [];
+                          const isActive = currentShifts.includes(s.code);
+                          return (
+                            <button
+                              key={s.code}
+                              onClick={() => {
+                                const newChannelShifts = { ...(bizRules.channelShifts || {}) };
+                                const chanShifts = newChannelShifts[ch] || [];
+                                newChannelShifts[ch] = chanShifts.includes(s.code)
+                                  ? chanShifts.filter(sc => sc !== s.code)
+                                  : [...chanShifts, s.code].sort();
+                                setBizRules({ ...bizRules, channelShifts: newChannelShifts });
+                              }}
+                              className={`px-4 py-2 rounded-xl text-[10px] font-black transition-all border ${isActive ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 border-slate-200 text-slate-400 hover:border-slate-300'}`}
+                            >
+                              {s.code}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
                </div>
             </div>
           </div>

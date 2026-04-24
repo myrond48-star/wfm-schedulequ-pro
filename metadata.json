@@ -1,5 +1,5 @@
 {
   "name": "WFM Project - ScheduleQu",
-  "description": "",
+  "description": "A comprehensive Workforce Management (WFM) suite featuring traffic forecasting, interval-based staffing planning, and temporary scheduling with live calendar transfer capabilities.",
   "requestFramePermissions": []
 }

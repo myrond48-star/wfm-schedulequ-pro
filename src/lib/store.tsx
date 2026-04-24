@@ -20,6 +20,7 @@ export interface SystemSettings {
     operatingHours: Record<string, { start: string; end: string; closed: boolean }>;
     weekendDays: number[];
     holidayClosed: boolean;
+    channelShifts?: Record<string, string[]>;
   };
 }
 

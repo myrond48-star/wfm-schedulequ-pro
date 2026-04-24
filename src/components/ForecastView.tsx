@@ -26,13 +26,14 @@ import {
   Table as TableIcon,
   Filter,
   Trash2,
-  Sparkles,
   BrainCircuit,
   AlertCircle,
   FileSpreadsheet,
   LineChart as LineChartIcon,
   Users,
   RefreshCw,
+  Save,
+  Sparkles,
 } from "lucide-react";
 import {
   format,
@@ -47,6 +48,7 @@ import {
   subMonths,
   getDay,
   addDays,
+  differenceInDays,
   startOfMonth,
   endOfMonth,
 } from "date-fns";
@@ -62,8 +64,14 @@ interface ForecastViewProps {
 export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
   const { settings } = useAppStore();
   const [activeTab, setActiveTab] = useState<
-    "monthly" | "interval" | "forecast_gen" | "historical"
+    "monthly" | "interval" | "forecast_gen" | "historical" | "staffing" | "scheduling"
   >("monthly");
+  const [staffingTabMode, setStaffingTabMode] = useState<"shift" | "interval">("shift");
+  const [agents, setAgents] = useState<any[]>([]);
+  const [tempSchedules, setTempSchedules] = useState<any[]>([]);
+  const [tempStaffing, setTempStaffing] = useState<Record<string, number[]>>({});
+  const [isSavingTemp, setIsSavingTemp] = useState(false);
+  const [isLoadingTemp, setIsLoadingTemp] = useState(false);
   const [intervalSize, setIntervalSize] = useState<15 | 30 | 60>(15);
   const [year, setYear] = useState(new Date().getFullYear());
   const [loading, setLoading] = useState(false);
@@ -73,6 +81,14 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
   const [intervalRangeEnd, setIntervalRangeEnd] = useState(
     format(new Date(), "yyyy-MM-dd"),
   );
+  const [staffingStartDate, setStaffingStartDate] = useState(format(new Date(), "yyyy-MM-dd"));
+  const [staffingEndDate, setStaffingEndDate] = useState(format(addDays(new Date(), 6), "yyyy-MM-dd"));
+  const [availableHeadcount, setAvailableHeadcount] = useState<number>(0);
+  const [actualStaffing, setActualStaffing] = useState<Record<string, Record<string, number>>>({});
+  const [customShiftDists, setCustomShiftDists] = useState<Record<string, number>>({});
+  const [isSavingActual, setIsSavingActual] = useState(false);
+  const [aiStaffingPrompt, setAiStaffingPrompt] = useState("");
+  const [isGeneratingStaffingAi, setIsGeneratingStaffingAi] = useState(false);
   const [intervalViewMode, setIntervalViewMode] = useState<"interval" | "daily">("interval");
   const [intervalRangeData, setIntervalRangeData] = useState<any[]>([]);
   const [showHistory, setShowHistory] = useState(false);
@@ -145,6 +161,80 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
   const [targetStaffTime, setTargetStaffTime] = useState<number | string>(9);
   const [targetUtilization, setTargetUtilization] = useState<number | string>(80);
 
+  const formatInUTC = (date: Date, formatStr: string) => {
+    const y = date.getUTCFullYear();
+    const m = date.getUTCMonth();
+    const d = date.getUTCDate();
+
+    if (formatStr === "yyyy-MM-dd") {
+      return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    }
+    if (formatStr === "dd MMM") {
+      const months = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+      ];
+      return `${String(d).padStart(2, "0")} ${months[m]}`;
+    }
+    if (formatStr === "dd MMM yyyy") {
+      const months = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+      ];
+      return `${String(d).padStart(2, "0")} ${months[m]} ${y}`;
+    }
+    return format(date, formatStr);
+  };
+
+  const getDayInfo = (date: Date) => {
+    const dateStr = formatInUTC(date, "yyyy-MM-dd");
+    const dow = date.getUTCDay(); // 0 = Sunday, 6 = Saturday
+    
+    // Respect dynamic weekend definition from settings
+    const isWeekend = (settings.bizRules?.weekendDays || [0, 6]).includes(dow);
+    const isHoliday = !!settings.holidays[dateStr];
+
+    const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    return { isWeekend, isHoliday, dayName: days[dow], dateStr, dow };
+  };
+
+  const isPeriodClosed = (date: Date, channelName: string) => {
+    const info = getDayInfo(date);
+    const biz = settings.bizRules || { operatingHours: {}, weekendDays: [0, 6], holidayClosed: true };
+    
+    // Holiday Rule
+    if (info.isHoliday && biz.holidayClosed) return true;
+    
+    // Weekend Rule
+    if (info.isWeekend) return true;
+    
+    // Operating Hours Rule
+    const chanRules = biz.operatingHours?.[channelName];
+    if (chanRules && chanRules.closed) return true;
+    
+    return false;
+  };
+
   const [dowWeights, setDowWeights] = useState<Record<number, number>>({
     0: 1,
     1: 1,
@@ -154,6 +244,192 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
     5: 1,
     6: 1,
   });
+
+  // Staffing related memoized values
+  const activeStaffingShifts = useMemo(() => {
+    const chanRules = settings.bizRules?.operatingHours?.[channel];
+    const allowedShifts = settings.bizRules?.channelShifts?.[channel];
+    const isCall = channel === "Call";
+
+    return Object.entries(settings.shifts)
+      .filter(([name, config]: [string, any]) => {
+        if (name === "OFF") return false;
+        
+        // Settings based filter takes priority
+        if (allowedShifts) return allowedShifts.includes(name);
+
+        // Fallback hardcoded rule for 'Call'
+        if (isCall) return ["S1", "S2", "S3", "S4"].includes(name);
+
+        // Operational hours fallback
+        if (!chanRules || chanRules.closed) return true;
+        const sTime = config.s;
+        const eTime = config.e;
+        return (sTime >= chanRules.start && sTime < chanRules.end) || 
+               (eTime > chanRules.start && eTime <= chanRules.end) ||
+               (sTime <= chanRules.start && eTime >= chanRules.end);
+      })
+      .sort(([a],[b]) => a.localeCompare(b));
+  }, [channel, settings.shifts, settings.bizRules]);
+
+  const staffingCalculations = useMemo(() => {
+    // Pre-compute overall default distributions and daily needs
+    const shiftWeekNeeded: Record<string, number> = {};
+    const dailySumNeeded: Record<string, number> = {};
+    const shiftDayNeeded: Record<string, Record<string, number>> = {};
+    let totalWeekNeeded = 0;
+    activeStaffingShifts.forEach(([n]) => shiftWeekNeeded[n] = 0);
+
+    let compD = new Date(`${staffingStartDate}T00:00:00Z`);
+    const compEndD = new Date(`${staffingEndDate}T00:00:00Z`);
+    while(compD <= compEndD) {
+       const dt = formatInUTC(compD, "yyyy-MM-dd");
+       let daySum = 0;
+       shiftDayNeeded[dt] = {};
+       if (!isPeriodClosed(compD, channel)) {
+         const dayReqs = tempStaffing[dt] || Array(96).fill(0);
+         activeStaffingShifts.forEach(([n, config]: [string, any]) => {
+             const parseTime = (t: string) => {
+               const [hh, mm] = t.split(':').map(Number);
+               return hh * 4 + Math.floor(mm / 15);
+             };
+             const startIdx = parseTime(config.s);
+             let endIdx = parseTime(config.e);
+             if (endIdx <= startIdx) endIdx += 96;
+
+             let sumNeeded = 0;
+             for (let i = startIdx; i < endIdx; i++) {
+               sumNeeded += dayReqs[i % 96];
+             }
+             shiftWeekNeeded[n] += sumNeeded;
+             totalWeekNeeded += sumNeeded;
+             daySum += sumNeeded;
+             shiftDayNeeded[dt][n] = sumNeeded;
+         });
+       } else {
+         activeStaffingShifts.forEach(([n]) => shiftDayNeeded[dt][n] = 0);
+       }
+       dailySumNeeded[dt] = daySum;
+       compD.setUTCDate(compD.getUTCDate() + 1);
+    }
+
+    const defaultDists: Record<string, number> = {};
+    let distSum = 0;
+    const remaindersDist: {name: string, rem: number, val: number}[] = [];
+    activeStaffingShifts.forEach(([n]) => {
+      if (totalWeekNeeded > 0) {
+         const raw = (shiftWeekNeeded[n] / totalWeekNeeded) * 100;
+         const val = Math.floor(raw);
+         distSum += val;
+         remaindersDist.push({name: n, rem: raw - val, val});
+      } else {
+         defaultDists[n] = 0;
+      }
+    });
+    
+    if (distSum > 0) {
+      remaindersDist.sort((a,b) => b.rem - a.rem);
+      for (let i = 0; i < remaindersDist.length && distSum < 100; i++) {
+         remaindersDist[i].val++;
+         distSum++;
+      }
+      remaindersDist.forEach(r => {
+         defaultDists[r.name] = r.val;
+      });
+    }
+
+    const shiftWeekAverages: Record<string, number> = {};
+    activeStaffingShifts.forEach(([n]) => {
+        let count = 0;
+        let sum = 0;
+        let cD = new Date(`${staffingStartDate}T00:00:00Z`);
+        while(cD <= compEndD) {
+            if (!isPeriodClosed(cD, channel)) {
+               const dtStr = formatInUTC(cD, "yyyy-MM-dd");
+               sum += shiftDayNeeded[dtStr]?.[n] || 0;
+               count++;
+            }
+            cD.setUTCDate(cD.getUTCDate() + 1);
+        }
+        shiftWeekAverages[n] = count > 0 ? sum / count : 0;
+    });
+
+    // Build the computed actuals per day
+    const computedShiftActuals: Record<string, Record<string, number>> = {};
+    
+    compD = new Date(`${staffingStartDate}T00:00:00Z`);
+    while(compD <= compEndD) {
+       const dt = formatInUTC(compD, "yyyy-MM-dd");
+       computedShiftActuals[dt] = {};
+
+       const isClosed = isPeriodClosed(compD, channel);
+       let dailyNetHC = 0;
+       
+       if (!isClosed) {
+           const info = getDayInfo(compD);
+           // Default OFF is 2/7 of total HC (assuming 5 work days)
+           let offRatio = 2 / 7;
+           
+           // Jika ada holiday menyesuaikan (if holiday and open, maybe assume 50% are off)
+           if (info.isHoliday || info.isWeekend) {
+               offRatio = 0.5; 
+           }
+           
+           const offCount = Math.round(availableHeadcount * offRatio);
+           dailyNetHC = availableHeadcount - offCount;
+       }
+
+       if (dailyNetHC > 0) {
+          let assigned = 0;
+          const remainders: {name: string, rem: number, val: number}[] = [];
+          
+          let sumModulated = 0;
+          const modulatedWeights: Record<string, number> = {};
+
+          activeStaffingShifts.forEach(([n]) => {
+             let baseDist = customShiftDists[n] !== undefined ? customShiftDists[n] : defaultDists[n];
+             if (baseDist === undefined) baseDist = 100 / activeStaffingShifts.length;
+             
+             const avg = shiftWeekAverages[n];
+             let modulation = 1;
+             if (avg > 0) {
+                 modulation = (shiftDayNeeded[dt][n] || 0) / avg;
+             }
+             
+             const modWeight = baseDist * modulation;
+             modulatedWeights[n] = modWeight;
+             sumModulated += modWeight;
+          });
+
+          activeStaffingShifts.forEach(([n]) => {
+             const normalizedPct = sumModulated > 0 ? (modulatedWeights[n] / sumModulated) : 0;
+             const raw = normalizedPct * dailyNetHC;
+             const val = Math.floor(raw);
+             assigned += val;
+             remainders.push({ name: n, rem: raw - val, val });
+          });
+
+          remainders.sort((a,b) => b.rem - a.rem);
+          for (let i = 0; i < remainders.length && assigned < dailyNetHC; i++) {
+             remainders[i].val++;
+             assigned++;
+          }
+          remainders.forEach(r => {
+             computedShiftActuals[dt][r.name] = r.val;
+          });
+       } else {
+          activeStaffingShifts.forEach(([n]) => {
+             computedShiftActuals[dt][n] = 0;
+          });
+       }
+       compD.setUTCDate(compD.getUTCDate() + 1);
+    }
+
+    return { defaultDists, computedShiftActuals, totalWeekNeeded };
+  }, [
+    channel, staffingStartDate, staffingEndDate, tempStaffing, 
+    availableHeadcount, settings.shifts, activeStaffingShifts, customShiftDists
+  ]);
 
   const [manualMonthlyData, setManualMonthlyData] = useState<
     Record<string, number>
@@ -243,79 +519,6 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
       );
     }
   }, [intervalPattern, holidayPattern, channel]);
-
-  const formatInUTC = (date: Date, formatStr: string) => {
-    const y = date.getUTCFullYear();
-    const m = date.getUTCMonth();
-    const d = date.getUTCDate();
-
-    if (formatStr === "yyyy-MM-dd") {
-      return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    }
-    if (formatStr === "dd MMM") {
-      const months = [
-        "Jan",
-        "Feb",
-        "Mar",
-        "Apr",
-        "May",
-        "Jun",
-        "Jul",
-        "Aug",
-        "Sep",
-        "Oct",
-        "Nov",
-        "Dec",
-      ];
-      return `${String(d).padStart(2, "0")} ${months[m]}`;
-    }
-    if (formatStr === "dd MMM yyyy") {
-      const months = [
-        "Jan",
-        "Feb",
-        "Mar",
-        "Apr",
-        "May",
-        "Jun",
-        "Jul",
-        "Aug",
-        "Sep",
-        "Oct",
-        "Nov",
-        "Dec",
-      ];
-      return `${String(d).padStart(2, "0")} ${months[m]} ${y}`;
-    }
-    return format(date, formatStr);
-  };
-
-  const getDayInfo = (date: Date) => {
-    const dateStr = formatInUTC(date, "yyyy-MM-dd");
-    const dow = date.getUTCDay(); // 0 = Sunday, 6 = Saturday
-    
-    // Respect dynamic weekend definition from settings
-    const isWeekend = (settings.bizRules?.weekendDays || [0, 6]).includes(dow);
-    const isHoliday = !!settings.holidays[dateStr];
-
-    const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-    return { isWeekend, isHoliday, dayName: days[dow], dateStr, dow };
-  };
-
-  const isPeriodClosed = (date: Date, channelName: string) => {
-    const info = getDayInfo(date);
-    const biz = settings.bizRules || { operatingHours: {}, weekendDays: [0, 6], holidayClosed: true };
-    
-    // Holiday Rule
-    if (info.isHoliday && biz.holidayClosed) return true;
-    
-    // Weekend Rule
-    if (info.isWeekend) return true;
-    
-    // Channel Level Rule
-    if (biz.operatingHours?.[channelName]?.closed) return true;
-    
-    return false;
-  };
 
   const isTimeOperational = (date: Date, channelName: string) => {
     // 1. Check if the whole day is closed
@@ -2517,6 +2720,20 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
           <TableIcon size={14} />
           Historical Data
         </button>
+        <button
+          onClick={() => setActiveTab("staffing")}
+          className={`whitespace-nowrap px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${activeTab === "staffing" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100" : "text-slate-500 hover:bg-slate-100"}`}
+        >
+          <Users size={14} />
+          Staffing Plan
+        </button>
+        <button
+          onClick={() => setActiveTab("scheduling")}
+          className={`whitespace-nowrap px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${activeTab === "scheduling" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100" : "text-slate-500 hover:bg-slate-100"}`}
+        >
+          <Calendar size={14} />
+          Scheduling (Temp)
+        </button>
       </div>
 
       {/* Delete Modal */}
@@ -3350,7 +3567,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                               <thead className="z-50">
                                 {/* Date Header Row */}
                                 <tr>
-                                  <th className="p-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200 sticky top-0 left-0 bg-slate-100 z-[100]">
+                                  <th className="p-3 text-[10px] font-black text-slate-500 tracking-tight text-center capitalize border-b border-r border-slate-200 sticky top-0 left-0 bg-slate-100 z-[100]">
                                     Time (UTC)
                                   </th>
                                   {sortedDates.map((d) => {
@@ -3390,7 +3607,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                     return (
                                       <th
                                         key={d}
-                                        className={`p-3 text-[10px] font-black ${textColor} uppercase tracking-widest text-center border-b border-r border-slate-200 min-w-[120px] sticky top-0 z-50 ${bgColor}`}
+                                        className={`p-3 text-[10px] font-black ${textColor} tracking-tight text-center capitalize border-b border-r border-slate-200 ${isWeekend || isHoliday ? "min-w-[80px]" : "min-w-[120px]"} sticky top-0 z-50 ${bgColor}`}
                                       >
                                         <div className="flex flex-col gap-0.5">
                                           <span className="text-[8px] opacity-60">
@@ -3401,14 +3618,14 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                       </th>
                                     );
                                   })}
-                                  <th className="p-3 text-[10px] font-black text-indigo-700 uppercase tracking-widest text-center bg-indigo-50 border-b border-l border-indigo-100 min-w-[140px] sticky top-0 right-0 z-[100] shadow-[-4px_0_10px_-4px_rgba(0,0,0,0.05)]">
+                                  <th className="p-3 text-[10px] font-black text-indigo-700 tracking-tight text-center capitalize bg-indigo-50 border-b border-l border-indigo-100 min-w-[140px] sticky top-0 right-0 z-[100] shadow-[-4px_0_10px_-4px_rgba(0,0,0,0.05)]">
                                     Grand Total
                                   </th>
                                 </tr>
 
                                 {/* Daily Total & Adjustment (Integrated in Header) */}
                                 <tr className="bg-slate-50 shadow-md">
-                                  <th className="p-3 text-[9px] font-black text-indigo-900 border-b border-r border-slate-200 sticky top-[52px] left-0 bg-slate-100 z-[100] uppercase tracking-tighter shadow-[2px_2px_5px_rgba(0,0,0,0.02)]">
+                                  <th className="p-3 text-[9px] font-black text-indigo-900 border-b border-r border-slate-200 sticky top-[52px] left-0 bg-slate-100 z-[100] text-center capitalize tracking-tighter shadow-[2px_2px_5px_rgba(0,0,0,0.02)]">
                                     <div className="flex flex-col gap-1">
                                       <span>Daily Volume</span>
                                       <span className="text-[7px] text-emerald-600 font-bold px-1 py-0.5 bg-emerald-100 rounded inline-block">
@@ -3516,7 +3733,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                     <Users size={18} />
                   </div>
                   <div>
-                    <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">
+                    <h4 className="text-xs font-black text-slate-800 mb-4 px-2 tracking-wide capitalize">
                       Agent Requirement Preview
                     </h4>
                     <p className="text-[9px] text-slate-400 font-medium tracking-tight">
@@ -3645,7 +3862,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                         <table className="w-full text-left border-separate border-spacing-0 bg-white">
                           <thead className="z-50">
                             <tr>
-                              <th className="p-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200 sticky top-0 left-0 bg-slate-100 z-[100]">
+                              <th className="p-3 text-[10px] font-black text-slate-500 tracking-tight text-center capitalize border-b border-r border-slate-200 sticky top-0 left-0 bg-slate-100 z-[100]">
                                 Time (UTC)
                               </th>
                               {sortedDates.map((d) => {
@@ -3657,7 +3874,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                 const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
                                 return (
-                                  <th key={d} className={`p-3 text-[10px] font-black ${textColor} uppercase tracking-widest text-center border-b border-r border-slate-200 min-w-[120px] sticky top-0 z-50 ${bgColor}`}>
+                                  <th key={d} className={`p-3 text-[10px] font-black ${textColor} tracking-tight text-center capitalize border-b border-r border-slate-200 ${isWeekend || isHoliday ? "min-w-[80px]" : "min-w-[120px]"} sticky top-0 z-50 ${bgColor}`}>
                                     <div className="flex flex-col gap-0.5">
                                       <span className="text-[8px] opacity-60">{dayName}</span>
                                       <span className="font-black text-xs">{`${String(dateObj.getUTCDate()).padStart(2, "0")} ${months[dateObj.getUTCMonth()]}`}</span>
@@ -3667,7 +3884,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                               })}
                             </tr>
                             <tr className="bg-slate-50 shadow-md">
-                              <th className="p-3 text-[9px] font-black text-indigo-900 border-b border-r border-slate-200 sticky top-[52px] left-0 bg-slate-100 z-[100] uppercase tracking-tighter">
+                              <th className="p-3 text-[9px] font-black text-indigo-900 border-b border-r border-slate-200 sticky top-[52px] left-0 bg-slate-100 z-[100] text-center capitalize tracking-tighter">
                                 Daily Agent Need (HC)
                               </th>
                               {sortedDates.map((date) => {
@@ -3684,7 +3901,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                 const dailyAgents = Math.ceil(totalDailyHours / (effCapacity || 1));
                                 
                                 return (
-                                  <th key={`peak-${date}`} className="p-3 border-b border-r border-slate-200 bg-slate-50 sticky top-[52px] z-50 text-center">
+                                  <th key={`peak-${date}`} className={`p-3 border-b border-r border-slate-200 bg-slate-50 sticky top-[52px] z-50 text-center ${getDayInfo(new Date(date)).isWeekend || getDayInfo(new Date(date)).isHoliday ? "min-w-[80px]" : "min-w-[120px]"}`}>
                                     <div className="text-[11px] font-black text-indigo-800 font-mono">
                                       {dailyAgents.toLocaleString() || "0"}
                                     </div>
@@ -3734,18 +3951,18 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                   <table className="w-full text-left border-collapse min-w-[1200px]">
                     <thead>
                       <tr className="bg-slate-50">
-                        <th className="p-4 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider border-b border-slate-100 sticky left-0 bg-slate-50 z-20">
+                        <th className="p-4 text-[10px] font-extrabold text-slate-500 tracking-tight text-center capitalize border-b border-slate-100 sticky left-0 bg-slate-50 z-20">
                           Metric / Month
                         </th>
                         {generatedForecast.map((d) => (
                           <th
                             key={d.month}
-                            className="p-4 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider border-b border-slate-100 text-center"
+                            className="p-4 text-[11px] font-black text-slate-600 tracking-tight text-center capitalize border-b border-slate-100 text-center"
                           >
                             {d.month}
                           </th>
                         ))}
-                        <th className="p-4 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider border-b border-slate-100 text-right">
+                        <th className="p-4 text-[11px] font-black text-slate-600 tracking-tight text-center capitalize border-b border-slate-100 text-center">
                           Total
                         </th>
                       </tr>
@@ -3753,7 +3970,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                     <tbody>
                       {/* Base Volume Row */}
                       <tr className="hover:bg-slate-50 transition-colors border-b border-slate-50">
-                        <td className="p-4 text-xs font-bold text-slate-700 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                        <td className="p-4 text-xs font-extrabold text-slate-700 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] text-center capitalize">
                           Base Volume ({baseYear})
                         </td>
                         {generatedForecast.map((d, idx) => (
@@ -3764,7 +3981,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                             {d.base.toLocaleString()}
                           </td>
                         ))}
-                        <td className="p-4 text-xs font-extrabold text-slate-700 text-right bg-slate-50/30">
+                        <td className="p-4 text-xs font-extrabold text-slate-700 text-center bg-slate-50/30">
                           {generatedForecast
                             .reduce((sum, d) => sum + d.base, 0)
                             .toLocaleString()}
@@ -3773,7 +3990,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
 
                       {/* Distribution Row */}
                       <tr className="hover:bg-slate-50 transition-colors border-b border-slate-50">
-                        <td className="p-4 text-xs font-bold text-slate-700 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                        <td className="p-4 text-xs font-extrabold text-slate-700 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] text-center capitalize">
                           Distribution (%)
                         </td>
                         {generatedForecast.map((d, idx) => (
@@ -3784,14 +4001,14 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                             {d.distribution.toFixed(2)}%
                           </td>
                         ))}
-                        <td className="p-4 text-xs font-extrabold text-slate-700 text-right bg-slate-50/30">
+                        <td className="p-4 text-xs font-extrabold text-slate-700 text-center bg-slate-50/30">
                           100.00%
                         </td>
                       </tr>
 
                       {/* Monthly Adjustment Row */}
                       <tr className="hover:bg-slate-50 transition-colors border-b border-slate-50">
-                        <td className="p-4 text-xs font-bold text-slate-700 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                        <td className="p-4 text-xs font-extrabold text-slate-700 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] text-center capitalize">
                           Monthly Adj (%)
                         </td>
                         {generatedForecast.map((d, idx) => (
@@ -3813,14 +4030,14 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                             />
                           </td>
                         ))}
-                        <td className="p-4 text-xs font-extrabold text-slate-700 text-right bg-slate-50/30">
+                        <td className="p-4 text-xs font-extrabold text-slate-700 text-center bg-slate-50/30">
                           -
                         </td>
                       </tr>
 
                       {/* Forecast Volume Row */}
                       <tr className="hover:bg-slate-50 transition-colors border-b border-slate-50">
-                        <td className="p-4 text-xs font-bold text-slate-700 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                        <td className="p-4 text-xs font-extrabold text-slate-700 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] text-center capitalize">
                           Forecast Volume ({forecastYear})
                         </td>
                         {generatedForecast.map((d, idx) => (
@@ -3831,7 +4048,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                             {d.final.toLocaleString()}
                           </td>
                         ))}
-                        <td className="p-4 text-xs font-extrabold text-indigo-600 text-right bg-indigo-50/30">
+                        <td className="p-4 text-xs font-extrabold text-indigo-600 text-center bg-indigo-50/30">
                           {generatedForecast
                             .reduce((sum, d) => sum + d.final, 0)
                             .toLocaleString()}
@@ -3840,7 +4057,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
 
                       {/* Headcount Row using Erlang C output */}
                       <tr className="hover:bg-slate-50 transition-colors border-b border-slate-50">
-                        <td className="p-4 text-xs font-bold text-slate-700 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                        <td className="p-4 text-xs font-extrabold text-slate-700 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] text-center capitalize">
                           Agent HC (FTE)
                         </td>
                         {generatedForecast.map((d, idx) => {
@@ -3903,7 +4120,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                             </td>
                           );
                         })}
-                        <td className="p-4 text-xs font-extrabold text-violet-700 text-right bg-violet-50/30">
+                        <td className="p-4 text-xs font-extrabold text-violet-700 text-center bg-violet-50/30">
                           -
                         </td>
                       </tr>
@@ -3912,6 +4129,828 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                 </div>
               </div>
             )}
+          </div>
+        ) : activeTab === "staffing" ? (
+          <div className="flex flex-col gap-6 max-w-7xl mx-auto p-4 sm:p-6">
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden min-h-[600px] flex flex-col">
+              <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4 bg-white sticky top-0 z-50">
+                <div>
+                  <h3 className="text-sm font-extrabold text-slate-800 capitalize tracking-tight flex items-center gap-2">
+                    <Users size={16} className="text-indigo-600" />
+                    Staffing Plan & Requirements
+                  </h3>
+                  <p className="text-[10px] text-slate-500 font-medium">Analyze staffing composition and interval requirements.</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  {staffingTabMode === "shift" && (
+                     <div className="flex items-center bg-indigo-50/50 p-1 rounded-xl border border-indigo-100">
+                       <label className="text-[10px] font-black text-indigo-600 capitalize tracking-widest pl-2 pr-1">Actual HC:</label>
+                       <input 
+                         type="number"
+                         min="0"
+                         value={availableHeadcount || ""}
+                         onChange={(e) => setAvailableHeadcount(parseInt(e.target.value) || 0)}
+                         placeholder="e.g. 50"
+                         className="w-20 p-1 text-xs font-bold text-center border-none rounded-lg bg-white text-indigo-800 outline-none shadow-sm mx-1 focus:ring-1 focus:ring-indigo-400"
+                       />
+                     </div>
+                  )}
+                  {staffingTabMode === "shift" && (
+                    <div className="flex items-center gap-2 bg-white p-1 rounded-2xl border border-slate-200 shadow-sm transition-all focus-within:ring-2 focus-within:ring-indigo-500/20">
+                      <Sparkles size={16} className="text-amber-500 ml-2" />
+                      <input
+                        type="text"
+                        placeholder="Optimize composition with AI (e.g. 'prioritize morning shifts' or 'balanced coverage')"
+                        className="text-xs p-2 w-[350px] sm:w-[550px] outline-none bg-transparent font-medium border-r border-slate-100"
+                        value={aiStaffingPrompt}
+                        onChange={(e) => setAiStaffingPrompt(e.target.value)}
+                      />
+                      <button
+                        disabled={isGeneratingStaffingAi}
+                        onClick={async () => {
+                          if (!process.env.GEMINI_API_KEY) {
+                            alert("GEMINI_API_KEY environment variable is required");
+                            return;
+                          }
+                          setIsGeneratingStaffingAi(true);
+                          try {
+                            const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+                            
+                            const activeShiftsList = Object.keys(settings.shifts).filter(n => n !== "OFF");
+                            const shiftDetails = activeShiftsList.map(n => {
+                              const s = settings.shifts[n];
+                              return `${n} (${s.s}-${s.e})`;
+                            }).join(", ");
+                            
+                            // Contextual data: What the erlang math says is needed
+                            const structuralContext = Object.entries(staffingCalculations.defaultDists)
+                              .map(([name, val]) => `${name}: ${val}%`)
+                              .join(", ");
+
+                            const avgDailyHC = Math.round(availableHeadcount * (5/7));
+
+                            const prompt = `System: You are an expert WFM Capacity Planner.
+                            Objective: Suggest a staffing composition (percentages) for these shifts: ${shiftDetails}.
+                            Math-based Workload Req: ${structuralContext} (baseline distribution).
+
+                            Total Available Headcount per Day is approximately: ${avgDailyHC}.
+                            If the user requests specific integer headcounts for a shift (e.g. "4 agents on S1"), calculate what percentage that is out of ${avgDailyHC} and apply it.
+
+                            User Specific Request: "${aiStaffingPrompt || "Provide a polished, ideal distribution that accounts for the workload while maintaining operational stability."}"
+
+                            Constraints:
+                            1. YOU MUST RETURN ONLY A VALID JSON OBJECT.
+                            2. Keys must exactly match: ${activeShiftsList.join(", ")}.
+                            3. Values must be integers (percentages).
+                            4. THE SUM OF ALL PERCENTAGES MUST EQUAL EXACTLY 100.
+                            5. NO MARKDOWN, NO BACKTICKS, NO EXTRA TEXT. ONLY RAW JSON.
+                            
+                            Output format example: {"S1": 25, "S2": 35, "S3": 30, "S4": 10}`;
+
+                            const result = await ai.models.generateContent({
+                              model: "gemini-3.1-pro-preview",
+                              contents: prompt
+                            });
+                            const text = result.text;
+                            const jsonMatch = text.match(/\{[\s\S]*\}/);
+                            if (jsonMatch) {
+                              const suggestedDists: Record<string, any> = JSON.parse(jsonMatch[0]);
+                              const sum = Object.values(suggestedDists).reduce((a: number, b: any) => a + (Number(b) || 0), 0) as number;
+                              
+                              if (sum === 100) {
+                                setCustomShiftDists(prev => ({...prev, ...suggestedDists}));
+                              } else {
+                                // Fallback normalization if AI fails simple math
+                                const normalized: Record<string, any> = { ...suggestedDists };
+                                const keys = Object.keys(normalized);
+                                let currentSum: number = sum;
+                                while(currentSum !== 100 && currentSum > 0) {
+                                  const diff: number = 100 - currentSum;
+                                  normalized[keys[0]] = (Number(normalized[keys[0]]) || 0) + diff;
+                                  currentSum = Object.values(normalized).reduce((a: number, b: any) => a + (Number(b) || 0), 0) as number;
+                                }
+                                setCustomShiftDists(prev => ({...prev, ...normalized}));
+                              }
+                            }
+                          } catch (error) {
+                            console.error("AI Error:", error);
+                            alert("Failed to generate AI suggestion");
+                          } finally {
+                            setIsGeneratingStaffingAi(false);
+                          }
+                        }}
+                        className={`p-2 px-4 rounded-xl transition-all flex items-center gap-2 ${isGeneratingStaffingAi ? "bg-slate-100 text-slate-400" : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-md active:scale-95"}`}
+                      >
+                        {isGeneratingStaffingAi ? <RefreshCw size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                        <span className="text-xs font-bold">Optimize Plan</span>
+                      </button>
+                      <button
+                        onClick={() => setCustomShiftDists({})}
+                        className="p-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition-all flex items-center gap-2 active:scale-95 border border-slate-200"
+                        title="Reset distribution to match interval requirements"
+                      >
+                        <RefreshCw size={14} />
+                        <span className="text-[10px] font-bold uppercase tracking-wider hidden sm:block">Reset Math</span>
+                      </button>
+                    </div>
+                  )}
+                  {staffingTabMode === "interval" && (
+                    <div className="flex bg-slate-100 p-1 rounded-xl">
+                      {[15, 30, 60].map((size) => (
+                        <button
+                          key={size}
+                          onClick={() => setIntervalSize(size as any)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${intervalSize === size ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                        >
+                          {size}m
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex items-center bg-slate-50 p-1 rounded-xl border border-slate-100">
+                    <input 
+                      type="date"
+                      className="bg-transparent border-none p-1.5 text-xs font-bold outline-none"
+                      value={staffingStartDate}
+                      onChange={(e) => setStaffingStartDate(e.target.value)}
+                    />
+                    <span className="text-slate-300 mx-1">to</span>
+                    <input 
+                      type="date"
+                      className="bg-transparent border-none p-1.5 text-xs font-bold outline-none"
+                      value={staffingEndDate}
+                      onChange={(e) => setStaffingEndDate(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="flex p-1 bg-slate-100 rounded-xl">
+                    <button
+                      onClick={() => setStaffingTabMode("shift")}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${staffingTabMode === "shift" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                    >
+                      Shift Comp.
+                    </button>
+                    <button
+                      onClick={() => setStaffingTabMode("interval")}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${staffingTabMode === "interval" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                    >
+                      Interval Req.
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={async () => {
+                      setIsSavingActual(true);
+                      try {
+                        let d = new Date(`${staffingStartDate}T00:00:00Z`);
+                        const endD = new Date(`${staffingEndDate}T00:00:00Z`);
+                        const promises = [];
+                        while(d <= endD) {
+                           const dt = formatInUTC(d, "yyyy-MM-dd");
+                           const key = `STAFFING_ACTUAL_${channel}_${dt}`;
+                           const valToSave = actualStaffing[dt] || {};
+                           if (Object.keys(valToSave).length > 0) {
+                              promises.push(
+                                callSupabaseAPI('wfm_config', 'POST', {
+                                    key,
+                                    value: JSON.stringify(valToSave),
+                                    updated_at: new Date().toISOString(),
+                                })
+                              );
+                           } else {
+                              promises.push(
+                                callSupabaseAPI('wfm_config', 'DELETE', undefined, `?key=eq.${key}`)
+                              );
+                           }
+                           d.setUTCDate(d.getUTCDate() + 1);
+                        }
+                        await Promise.all(promises);
+                        alert("Actual Staffing data saved successfully!");
+                      } catch(e) {
+                        alert("Failed to save staffing data");
+                      } finally {
+                        setIsSavingActual(false);
+                      }
+                    }}
+                    className="p-2.5 bg-indigo-50 hover:bg-indigo-100 rounded-xl text-indigo-600 transition-all font-bold text-xs flex items-center gap-2 border border-indigo-100"
+                  >
+                    <Save size={14} className={isSavingActual ? "animate-pulse" : ""} />
+                    Save Edit
+                  </button>
+
+                  <button
+                    onClick={async () => {
+                      setIsLoadingTemp(true);
+                      try {
+                        let d = new Date(`${staffingStartDate}T00:00:00Z`);
+                        const endD = new Date(`${staffingEndDate}T00:00:00Z`);
+                        const dates: string[] = [];
+                        while(d <= endD) {
+                          dates.push(formatInUTC(d, "yyyy-MM-dd"));
+                          d.setUTCDate(d.getUTCDate() + 1);
+                        }
+
+                        const newTempStaffing: Record<string, number[]> = { ...tempStaffing };
+                        const newActualStaffing: Record<string, Record<string, number>> = { ...actualStaffing };
+                        
+                        try {
+                          // 1. Fetch all requirements for the range
+                          const reqRes = await callSupabaseAPI('wfm_requirements', 'GET', undefined, `?date=gte.${staffingStartDate}&date=lte.${staffingEndDate}&channel=eq.${encodeURIComponent(channel)}&select=date,requirements`).catch(() => []);
+                          const reqMap: Record<string, number[]> = {};
+                          if (reqRes) reqRes.forEach((r: any) => reqMap[r.date] = r.requirements);
+
+                          // 2. Fetch traffic forecast for the range
+                          const missingDates = dates.filter(dt => !reqMap[dt]);
+                          const forecastMap: Record<string, number[]> = {};
+                          
+                          if (missingDates.length > 0) {
+                            const forRes = await callSupabaseAPI('wfm_traffic_forecast', 'GET', undefined, `?channel=eq.${encodeURIComponent(channel)}&timestamp=gte.${staffingStartDate}T00:00:00Z&timestamp=lte.${staffingEndDate}T23:59:59Z&type=eq.interval_agents&select=timestamp,volume`).catch(() => []);
+                            if (forRes) {
+                              forRes.forEach((item: any) => {
+                                const idt = new Date(item.timestamp);
+                                const dtStr = formatInUTC(idt, "yyyy-MM-dd");
+                                if (!forecastMap[dtStr]) forecastMap[dtStr] = Array(96).fill(0);
+                                const h = idt.getUTCHours();
+                                const m = idt.getUTCMinutes();
+                                const idx = h * 4 + Math.floor(m / 15);
+                                if (idx >= 0 && idx < 96) forecastMap[dtStr][idx] = item.volume || 0;
+                              });
+                            }
+                          }
+
+                          // 3. Fetch configs (STAFFING_ACTUALs)
+                          const actKeyPattern = `STAFFING_ACTUAL_${channel}_`;
+                          const actRes = await callSupabaseAPI('wfm_config', 'GET', undefined, `?key=like.${encodeURIComponent(actKeyPattern)}*&select=key,value`).catch(() => []);
+                          const actualsMap: Record<string, any> = {};
+                          if (actRes) {
+                            actRes.forEach((r: any) => {
+                              const dtStr = r.key.replace(actKeyPattern, '');
+                              try {
+                                actualsMap[dtStr] = JSON.parse(r.value);
+                              } catch(e) {
+                                actualsMap[dtStr] = {};
+                              }
+                            });
+                          }
+
+                          dates.forEach((dt) => {
+                            if (reqMap[dt]) {
+                              newTempStaffing[dt] = reqMap[dt];
+                            } else if (forecastMap[dt]) {
+                              newTempStaffing[dt] = forecastMap[dt];
+                            } else {
+                              newTempStaffing[dt] = Array(96).fill(0);
+                            }
+
+                            newActualStaffing[dt] = actualsMap[dt] || {};
+                          });
+                        } catch (err) {
+                           console.error('Data load error', err);
+                        }
+
+                        setTempStaffing(newTempStaffing);
+                        setActualStaffing(newActualStaffing);
+                      } finally {
+                        setIsLoadingTemp(false);
+                      }
+                    }}
+                    className="p-2.5 bg-slate-50 hover:bg-slate-100 rounded-xl text-indigo-600 transition-all font-bold text-xs flex items-center gap-2 border border-slate-100"
+                  >
+                    <RefreshCw size={14} className={isLoadingTemp ? "animate-spin" : ""} />
+                    Load Data
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-auto relative scrollbar-thin">
+                {isLoadingTemp ? (
+                   <div className="flex flex-col items-center justify-center p-20 gap-4">
+                     <RefreshCw size={32} className="text-indigo-600 animate-spin" />
+                     <p className="text-xs font-bold text-slate-500 animate-pulse uppercase tracking-widest">Compiling staffing data...</p>
+                   </div>
+                ) : Object.keys(tempStaffing).filter(k => k >= staffingStartDate && k <= staffingEndDate).length === 0 ? (
+                  <div className="p-24 text-center text-slate-300">
+                    <Users size={64} className="mx-auto mb-6 opacity-10" />
+                    <p className="text-lg font-black uppercase tracking-widest">No Staffing Data Loaded</p>
+                    <p className="text-xs font-bold">Select range and click "Load Data".</p>
+                  </div>
+                ) : (
+                  staffingTabMode === "interval" ? (
+                    <table className="w-full text-left border-separate border-spacing-0">
+                      <thead className="sticky top-0 bg-slate-50 z-40">
+                        <tr className="bg-slate-50 border-b border-slate-200">
+                          <th className="sticky left-0 bg-slate-50 z-50 p-3 text-[10px] font-black text-slate-500 tracking-tight text-center capitalize border-r border-slate-200 w-24 shadow-sm">Interval</th>
+                          {(() => {
+                             const dts = [];
+                             let d = new Date(`${staffingStartDate}T00:00:00Z`);
+                             const endD = new Date(`${staffingEndDate}T00:00:00Z`);
+                             while(d <= endD) {
+                               dts.push(formatInUTC(d, "yyyy-MM-dd"));
+                               d.setUTCDate(d.getUTCDate() + 1);
+                             }
+                             return dts.map(dt => {
+                               const info = getDayInfo(new Date(`${dt}T12:00:00Z`));
+                               const isHol = !!settings.holidays[dt];
+                               const bgClass = isHol ? "bg-red-50 text-red-600" : info.isWeekend ? "bg-slate-100 text-slate-500" : "";
+                               return (
+                                 <th 
+                                   key={dt} 
+                                   className={`p-3 text-[10px] font-black tracking-tight text-center capitalize border-l border-slate-100 w-32 text-center ${bgClass}`}
+                                 >
+                                   <div className="flex flex-col">
+                                     <span className="opacity-60">{info.dayName.substring(0,3)}</span>
+                                     <span>{formatInUTC(new Date(`${dt}T00:00:00Z`), "dd MMM")}</span>
+                                     {isHol && <span className="text-[8px] truncate max-w-[80px]">{settings.holidays[dt]}</span>}
+                                   </div>
+                                 </th>
+                               );
+                             });
+                          })()}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Array((24 * 60) / intervalSize).fill(0).map((_, groupIdx) => {
+                          const numSlots = intervalSize / 15;
+                          const totalMinutes = groupIdx * intervalSize;
+                          const h = Math.floor(totalMinutes / 60);
+                          const m = totalMinutes % 60;
+                          const tStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                          
+                          return (
+                            <tr key={groupIdx} className="hover:bg-indigo-50/10 transition-colors group">
+                              <td className="sticky left-0 bg-white group-hover:bg-indigo-50/20 z-10 p-2 text-center text-xs font-black text-slate-500 border-r border-slate-100 font-mono shadow-sm">{tStr}</td>
+                              {(() => {
+                                 let d = new Date(`${staffingStartDate}T00:00:00Z`);
+                                 const endD = new Date(`${staffingEndDate}T00:00:00Z`);
+                                 const cells = [];
+                                 while(d <= endD) {
+                                   const dt = formatInUTC(d, "yyyy-MM-dd");
+                                   const baseArr = tempStaffing[dt] || Array(96).fill(0);
+                                   let subSum = 0;
+                                   for (let i = 0; i < numSlots; i++) {
+                                      subSum += baseArr[groupIdx * numSlots + i] || 0;
+                                   }
+                                   const val = Math.ceil(subSum / numSlots);
+
+                                   const isWeekend = (settings.bizRules?.weekendDays || [0, 6]).includes(d.getUTCDay());
+                                   const isHol = !!settings.holidays[dt];
+                                   const cellBg = isHol ? "bg-red-50/50" : isWeekend ? "bg-slate-200/60" : "bg-white";
+                                   cells.push(
+                                     <td key={dt} className={`p-1.5 border-l border-slate-50 text-center ${cellBg}`}>
+                                       <span className={`text-[11px] font-black ${val > 0 ? "text-slate-800" : "text-slate-300"}`}>
+                                         {val || "-"}
+                                       </span>
+                                     </td>
+                                   );
+                                   d.setUTCDate(d.getUTCDate() + 1);
+                                 }
+                                 return cells;
+                              })()}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="flex flex-col h-full overflow-hidden">
+                      <div className="flex-1 overflow-auto">
+                        <table className="min-w-max text-left border-separate border-spacing-0">
+                          <thead className="sticky top-0 bg-white z-40 shadow-[0_1px_0_0_rgba(0,0,0,0.05)]">
+                            <tr>
+                              <th className="sticky left-0 bg-white z-50 p-3 text-xs font-bold text-slate-600 tracking-tight border-r border-slate-200 w-[140px] min-w-[140px] text-center shadow-[1px_0_0_0_rgba(0,0,0,0.05)]">Shift</th>
+                              <th className="sticky left-[140px] bg-white z-50 p-3 text-xs font-bold text-slate-600 tracking-tight border-r border-slate-200 w-28 text-center shadow-[1px_0_0_0_rgba(0,0,0,0.05)]">% Distrib</th>
+                              {(() => {
+                                 const dts = [];
+                                 let d = new Date(`${staffingStartDate}T00:00:00Z`);
+                                 const endD = new Date(`${staffingEndDate}T00:00:00Z`);
+                                 while(d <= endD) {
+                                   dts.push(formatInUTC(d, "yyyy-MM-dd"));
+                                   d.setUTCDate(d.getUTCDate() + 1);
+                                 }
+                                 return dts.map(dt => {
+                                   const info = getDayInfo(new Date(`${dt}T12:00:00Z`));
+                                   const isHol = !!settings.holidays[dt];
+                                   // "warna weekend dan holiday sampai tabel bawah dan warna header lebih elegan lagi"
+                                   const bgClass = isHol ? "bg-rose-50 text-rose-700" : info.isWeekend ? "bg-slate-100/50 text-slate-600" : "bg-white text-slate-600";
+                                   return (
+                                     <th 
+                                       key={dt} 
+                                       className={`p-3 text-xs font-bold tracking-tight border-l border-slate-200 w-20 text-center ${bgClass}`}
+                                     >
+                                       <div className="flex flex-col">
+                                         <span className="opacity-60 text-[10px] uppercase font-black tracking-widest mb-0.5">{info.dayName.substring(0,3)}</span>
+                                         <span>{formatInUTC(new Date(`${dt}T00:00:00Z`), "dd MMM")}</span>
+                                       </div>
+                                     </th>
+                                   );
+                                 });
+                              })()}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(() => {
+                               const { defaultDists, computedShiftActuals } = staffingCalculations;
+                               const activeShifts = activeStaffingShifts;
+
+                               return (
+                                 <React.Fragment>
+                                   {activeShifts.map(([name, config]: [string, any]) => {
+                                     const distVal = customShiftDists[name] !== undefined ? customShiftDists[name] : defaultDists[name];
+                                     return (
+                                       <tr key={name} className="hover:bg-slate-50 transition-colors group border-b border-slate-100">
+                                         <td className="sticky left-0 bg-white group-hover:bg-slate-50 z-10 p-3 text-xs font-bold text-slate-700 border-r border-slate-200 shadow-[1px_0_0_0_rgba(0,0,0,0.05)] w-[140px] min-w-[140px]">
+                                           <div className="flex flex-col items-center justify-center gap-1">
+                                             <div className="flex items-center gap-1.5">
+                                               <div className="w-2 h-2 rounded-full" style={{ backgroundColor: config.bg }}></div>
+                                               <span>{name}</span>
+                                             </div>
+                                             <div className="text-[10px] text-slate-400 font-mono font-medium">{config.s}-{config.e}</div>
+                                           </div>
+                                         </td>
+                                         <td className="sticky left-[140px] bg-white group-hover:bg-slate-50 z-10 p-2 text-center border-r border-slate-200 shadow-[1px_0_0_0_rgba(0,0,0,0.05)] w-28">
+                                            <div className="flex items-center justify-center">
+                                              <input
+                                                type="number"
+                                                min="0"
+                                                max="100"
+                                                className="w-12 p-1 text-center text-xs font-bold border border-slate-200 rounded-md bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-colors"
+                                                value={distVal || ""}
+                                                onChange={(e) => {
+                                                  let val = parseInt(e.target.value);
+                                                  if (isNaN(val)) val = 0;
+                                                  if (val < 0) val = 0;
+                                                  if (val > 100) val = 100;
+                                                  setCustomShiftDists(prev => ({...prev, [name]: val}));
+                                                }}
+                                              />
+                                              <span className="text-[10px] ml-1 font-bold text-slate-400">%</span>
+                                            </div>
+                                         </td>
+                                         {(() => {
+                                            let d = new Date(`${staffingStartDate}T00:00:00Z`);
+                                            const endD = new Date(`${staffingEndDate}T00:00:00Z`);
+                                            const cells = [];
+                                            while(d <= endD) {
+                                              const dt = formatInUTC(d, "yyyy-MM-dd");
+                                              
+                                              const valFromState = actualStaffing[dt]?.[name];
+                                              const computedVal = computedShiftActuals[dt]?.[name] || 0;
+                                              const isOverridden = valFromState !== undefined;
+                                              const displayedVal = isOverridden ? valFromState : computedVal;
+
+                                              const info = getDayInfo(new Date(`${dt}T12:00:00Z`));
+                                              const isHol = !!settings.holidays[dt];
+                                              const cellBg = isHol ? "bg-rose-50/30" : info.isWeekend ? "bg-slate-100/40" : "bg-white";
+
+                                              cells.push(
+                                                <td key={dt} className={`p-2 border-l border-slate-200 text-center ${cellBg}`}>
+                                                  <div className="flex flex-col items-center justify-center">
+                                                    <input
+                                                      type="number"
+                                                      min="0"
+                                                      className={`w-full max-w-[50px] p-1.5 text-center text-xs font-bold rounded-md outline-none transition-all ${isOverridden ? "bg-indigo-50 border border-indigo-200 text-indigo-700" : "bg-transparent border border-transparent text-slate-600 hover:border-slate-200"} focus:bg-white focus:border-indigo-500`}
+                                                      value={displayedVal === 0 ? "" : displayedVal}
+                                                      placeholder="0"
+                                                      onChange={(e) => {
+                                                        const newVal = e.target.value === "" ? undefined : parseInt(e.target.value);
+                                                        setActualStaffing(prev => {
+                                                          const next = {...prev};
+                                                          if (!next[dt]) next[dt] = {};
+                                                          if (newVal === undefined) {
+                                                            delete next[dt][name];
+                                                          } else {
+                                                            next[dt][name] = newVal || 0;
+                                                          }
+                                                          return next;
+                                                        });
+                                                      }}
+                                                    />
+                                                  </div>
+                                                </td>
+                                              );
+                                              d.setUTCDate(d.getUTCDate() + 1);
+                                            }
+                                            return cells;
+                                         })()}
+                                       </tr>
+                                     );
+                                   })}
+                                   {/* OFF Row */}
+                                   <tr className="bg-slate-50/50 border-t border-slate-100">
+                                     <td className="sticky left-0 bg-slate-50/50 z-10 p-3 text-xs font-bold text-slate-500 border-r border-slate-200 shadow-[1px_0_0_0_rgba(0,0,0,0.05)] w-[140px] min-w-[140px]">
+                                       <div className="flex flex-col items-center justify-center gap-1">
+                                         <div className="flex items-center gap-1.5 opacity-60">
+                                           <div className="w-2 h-2 rounded-full bg-slate-400"></div>
+                                           <span>OFF</span>
+                                         </div>
+                                       </div>
+                                     </td>
+                                     <td className="sticky left-[140px] bg-slate-50/50 z-10 p-2 text-center text-xs text-slate-400 font-medium border-r border-slate-200 shadow-[1px_0_0_0_rgba(0,0,0,0.05)] w-28">
+                                        Rest Days
+                                     </td>
+                                     {(() => {
+                                        let d = new Date(`${staffingStartDate}T00:00:00Z`);
+                                        const endD = new Date(`${staffingEndDate}T00:00:00Z`);
+                                        const cells = [];
+                                        
+                                        while(d <= endD) {
+                                          const dt = formatInUTC(d, "yyyy-MM-dd");
+                                          let dailyTotal = 0;
+                                          activeShifts.forEach(([n]) => {
+                                            const valFromState = actualStaffing[dt]?.[n];
+                                            const computedVal = computedShiftActuals[dt]?.[n] || 0;
+                                            dailyTotal += (valFromState !== undefined ? valFromState : computedVal);
+                                          });
+                                          
+                                          const offCount = Math.max(0, availableHeadcount - dailyTotal);
+
+                                          // Distinguish holidays/weekends slightly
+                                          const info = getDayInfo(new Date(`${dt}T12:00:00Z`));
+                                          const isHol = !!settings.holidays[dt];
+                                          const cellBg = isHol ? "bg-rose-50/20" : info.isWeekend ? "bg-slate-100/30" : "bg-transparent";
+
+                                          cells.push(
+                                            <td key={dt} className={`p-2 border-l border-slate-200 text-center ${cellBg}`}>
+                                              <span className="text-xs font-bold text-slate-400 opacity-80">{offCount}</span>
+                                            </td>
+                                          );
+                                          d.setUTCDate(d.getUTCDate() + 1);
+                                        }
+                                        return cells;
+                                     })()}
+                                   </tr>
+                                   {/* Total Row */}
+                                   <tr className="bg-slate-50 border-t-2 border-slate-200">
+                                     <td className="sticky left-0 bg-slate-50 z-10 p-3 text-xs font-bold text-slate-700 border-r border-slate-200 shadow-[1px_0_0_0_rgba(0,0,0,0.05)] text-center w-[140px] min-w-[140px]">Summary</td>
+                                     <td className="sticky left-[140px] bg-slate-50 z-10 p-3 text-center text-xs font-bold text-slate-700 border-r border-slate-200 shadow-[1px_0_0_0_rgba(0,0,0,0.05)] w-28">
+                                        Total Actual HC
+                                     </td>
+                                     {(() => {
+                                        let d = new Date(`${staffingStartDate}T00:00:00Z`);
+                                        const endD = new Date(`${staffingEndDate}T00:00:00Z`);
+                                        const cells = [];
+                                        
+                                        while(d <= endD) {
+                                          const dt = formatInUTC(d, "yyyy-MM-dd");
+                                          let dailyTotal = 0;
+                                          activeShifts.forEach(([n]) => {
+                                            const valFromState = actualStaffing[dt]?.[n];
+                                            const computedVal = computedShiftActuals[dt]?.[n] || 0;
+                                            dailyTotal += (valFromState !== undefined ? valFromState : computedVal);
+                                          });
+
+                                          const offCount = Math.max(0, availableHeadcount - dailyTotal);
+                                          const displayedTotal = dailyTotal + offCount;
+
+                                          cells.push(
+                                            <td key={dt} className="p-3 text-center border-l border-slate-200">
+                                              <span className="text-sm font-black text-indigo-600">{displayedTotal || "-"}</span>
+                                            </td>
+                                          );
+                                          d.setUTCDate(d.getUTCDate() + 1);
+                                        }
+                                        return cells;
+                                     })()}
+                                   </tr>
+                                 </React.Fragment>
+                               );
+                            })()}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )
+                )}
+              </div>
+              
+              <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-[10px] font-bold text-slate-500">
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-3 h-3 bg-red-100 border border-red-200 rounded"></div>
+                    <span>Holiday</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-3 h-3 bg-slate-100 border border-slate-200 rounded"></div>
+                    <span>Weekend</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                   <AlertCircle size={12} className="text-indigo-400" />
+                   <span>Composition based on proportional sum of interval requirements.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : activeTab === "scheduling" ? (
+          <div className="flex flex-col gap-6 max-w-7xl mx-auto p-4 sm:p-6 text-slate-900 font-sans">
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-full min-h-[600px]">
+              <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row items-center justify-between flex-shrink-0 bg-white gap-4">
+                <div>
+                  <h3 className="text-sm font-extrabold text-slate-800 uppercase tracking-tight flex items-center gap-2">
+                    <Calendar size={16} className="text-violet-600" />
+                    Temporary Scheduling
+                  </h3>
+                  <p className="text-[10px] text-slate-500 font-medium">Build upcoming schedules without affecting the live calendar.</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center bg-slate-50 p-1 rounded-xl border border-slate-100">
+                    <input 
+                      type="date"
+                      className="bg-transparent border-none p-1.5 text-xs font-bold outline-none"
+                      value={selectedDate}
+                      onChange={(e) => setSelectedDate(e.target.value)}
+                    />
+                    <span className="text-slate-300 mx-1">to</span>
+                    <input 
+                      type="date"
+                      className="bg-transparent border-none p-1.5 text-xs font-bold outline-none"
+                      value={intervalRangeEnd}
+                      onChange={(e) => setIntervalRangeEnd(e.target.value)}
+                    />
+                  </div>
+                  <button
+                    onClick={async () => {
+                      setIsLoadingTemp(true);
+                      try {
+                        const [aRes, sRes] = await Promise.all([
+                          callSupabaseAPI('wfm_agents', 'GET', undefined, `?channel=eq.${encodeURIComponent(channel)}&select=*`),
+                          callSupabaseAPI('wfm_forecast_schedules', 'GET', undefined, `?channel=eq.${encodeURIComponent(channel)}&date=gte.${selectedDate}&date=lte.${intervalRangeEnd}&select=*`).catch(() => [])
+                        ]);
+                        if (aRes) setAgents(aRes);
+                        if (sRes) setTempSchedules(sRes);
+                        else setTempSchedules([]);
+                      } finally {
+                        setIsLoadingTemp(false);
+                      }
+                    }}
+                    className="p-2.5 bg-slate-50 hover:bg-slate-100 rounded-xl text-violet-600 transition-all font-bold text-xs flex items-center gap-2 border border-slate-100"
+                  >
+                    <RefreshCw size={14} className={isLoadingTemp ? "animate-spin" : ""} />
+                    Fetch Data
+                  </button>
+                  <button
+                    disabled={isSavingTemp || agents.length === 0}
+                    onClick={async () => {
+                      setIsSavingTemp(true);
+                      try {
+                        await callSupabaseAPI('wfm_forecast_schedules', 'DELETE', undefined, `?channel=eq.${encodeURIComponent(channel)}&date=gte.${selectedDate}&date=lte.${intervalRangeEnd}`);
+                        const chunkSize = 100;
+                        for (let i = 0; i < tempSchedules.length; i += chunkSize) {
+                          await callSupabaseAPI('wfm_forecast_schedules', 'POST', tempSchedules.slice(i, i + chunkSize));
+                        }
+                        alert("Draft saved to database.");
+                      } catch (err) {
+                        console.error(err);
+                        alert("Error saving draft. Table wfm_forecast_schedules might be missing.");
+                      } finally {
+                        setIsSavingTemp(false);
+                      }
+                    }}
+                    className="p-2.5 px-4 bg-violet-600 hover:bg-violet-700 rounded-xl text-white transition-all font-bold text-xs flex items-center gap-2 shadow-lg shadow-violet-100 disabled:opacity-50"
+                  >
+                    {isSavingTemp ? <RefreshCw size={14} className="animate-spin" /> : <FileUp size={14} />}
+                    Save Draft
+                  </button>
+                  <button
+                    disabled={isSavingTemp || tempSchedules.length === 0}
+                    onClick={async () => {
+                      if (!confirm("Confirm Transfer to LIVE Calendar? This will overwrite existing schedules for the selected period.")) return;
+                      setIsSavingTemp(true);
+                      try {
+                        for (const ts of tempSchedules) {
+                          const existing = await callSupabaseAPI('wfm_schedules', 'GET', undefined, `?date=eq.${ts.date}&nik=eq.${ts.nik}&select=id`);
+                          const payload = {
+                            date: ts.date,
+                            nik: ts.nik,
+                            nama: ts.nama,
+                            tl: ts.tl,
+                            channel: ts.channel,
+                            shift: ts.shift,
+                            bg_color: ts.bg_color
+                          };
+                          if (existing && existing.length > 0) {
+                            await callSupabaseAPI('wfm_schedules', 'PATCH', payload, `?id=eq.${existing[0].id}`);
+                          } else {
+                            await callSupabaseAPI('wfm_schedules', 'POST', payload);
+                          }
+                        }
+                        alert("Transfer complete. Live calendar updated.");
+                      } catch (err) {
+                        alert("Error transferring data.");
+                      } finally {
+                        setIsSavingTemp(false);
+                      }
+                    }}
+                    className="p-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 rounded-xl text-white transition-all font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-100 disabled:opacity-50"
+                  >
+                    <Sparkles size={14} />
+                    Transfer to Live
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-auto relative scrollbar-thin bg-white">
+                {agents.length === 0 ? (
+                  <div className="p-24 text-center text-slate-300">
+                    <Calendar size={64} className="mx-auto mb-6 opacity-10" />
+                    <p className="text-lg font-black uppercase tracking-widest">No Agents Loaded</p>
+                    <p className="text-xs font-bold">Select range and click "Fetch Data" to start scheduling.</p>
+                  </div>
+                ) : (
+                  <table className="border-separate border-spacing-0 table-auto w-full min-w-max">
+                    <thead className="sticky top-0 z-30">
+                      <tr className="bg-slate-50 border-b border-slate-200">
+                        <th className="sticky left-0 bg-slate-50 z-40 p-3 text-[10px] font-black text-slate-500 tracking-tight text-center capitalize w-12 shadow-[1px_0_0_0_rgba(0,0,0,0.05)]">#</th>
+                        <th className="sticky left-12 bg-slate-50 z-40 p-3 text-[10px] font-black text-slate-500 tracking-tight text-center capitalize w-24 shadow-[1px_0_0_0_rgba(0,0,0,0.05)]">NIK</th>
+                        <th className="sticky left-36 bg-slate-50 z-40 p-3 text-[10px] font-black text-slate-500 tracking-tight text-center capitalize w-48 shadow-[1px_0_0_0_rgba(0,0,0,0.05)]">Agent Name</th>
+                        {(() => {
+                           const dts = [];
+                           let d = new Date(`${selectedDate}T00:00:00Z`);
+                           const endD = new Date(`${intervalRangeEnd}T00:00:00Z`);
+                           while(d <= endD) {
+                             dts.push(formatInUTC(d, "yyyy-MM-dd"));
+                             d.setUTCDate(d.getUTCDate()+1);
+                           }
+                           return dts.map(dt => {
+                             const info = getDayInfo(new Date(`${dt}T12:00:00Z`));
+                             const isHol = !!settings.holidays[dt];
+                             const bgClass = isHol ? "bg-rose-50 text-rose-700" : info.isWeekend ? "bg-slate-100/50 text-slate-600" : "bg-white text-slate-600";
+                             return (
+                               <th key={dt} className={`p-3 text-[10px] font-black tracking-tight text-center capitalize border-l border-slate-100 w-28 text-center backdrop-blur-sm ${bgClass}`}>
+                                 {formatInUTC(new Date(`${dt}T00:00:00Z`), "EEE, dd MMM")}
+                               </th>
+                             );
+                           });
+                        })()}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {agents.map((agent, aIdx) => (
+                        <tr key={agent.nik} className="hover:bg-slate-50/50 transition-colors group">
+                          <td className="sticky left-0 bg-white group-hover:bg-slate-50 z-20 p-2 text-center text-[10px] font-bold text-slate-400 shadow-[1px_0_0_0_rgba(0,0,0,0.05)]">{aIdx + 1}</td>
+                          <td className="sticky left-12 bg-white group-hover:bg-slate-50 z-20 p-2 text-center text-xs font-black text-slate-600 font-mono tracking-tighter shadow-[1px_0_0_0_rgba(0,0,0,0.05)]">{agent.nik}</td>
+                          <td className="sticky left-36 bg-white group-hover:bg-slate-50 z-20 p-2 text-center text-xs font-bold text-slate-800 truncate max-w-[200px] shadow-[1px_0_0_0_rgba(0,0,0,0.05)] text-left">{agent.nama}</td>
+                          {(() => {
+                             const dts = [];
+                             let d = new Date(`${selectedDate}T00:00:00Z`);
+                             const endD = new Date(`${intervalRangeEnd}T00:00:00Z`);
+                             while(d <= endD) {
+                               dts.push(formatInUTC(d, "yyyy-MM-dd"));
+                               d.setUTCDate(d.getUTCDate()+1);
+                             }
+                             return dts.map(dt => {
+                               const sched = tempSchedules.find(s => s.nik === agent.nik && s.date === dt);
+                               const shift = sched?.shift || 'OFF';
+                               const color = settings.shifts[shift]?.bg || '#f8fafc';
+                               
+                               const info = getDayInfo(new Date(`${dt}T12:00:00Z`));
+                               const isHol = !!settings.holidays[dt];
+                               const cellBg = isHol ? "bg-rose-50/30" : info.isWeekend ? "bg-slate-100/40" : "bg-white";
+
+                               return (
+                                 <td key={dt} className={`p-1 border-l border-slate-100/50 group-hover:bg-slate-50/30 ${cellBg}`}>
+                                   <div className="relative group/select">
+                                     <select
+                                       className="w-full p-2 py-2.5 text-[10px] font-black rounded-xl border-2 border-transparent outline-none cursor-pointer hover:border-slate-200 transition-all text-center appearance-none shadow-sm"
+                                       style={{ backgroundColor: color, color: color === '#f8fafc' ? (info.isWeekend || isHol ? '#475569' : '#64748b') : 'inherit' }}
+                                       value={shift}
+                                       onChange={(e) => {
+                                         const newVal = e.target.value;
+                                         setTempSchedules(prev => {
+                                           const existingIdx = prev.findIndex(s => s.nik === agent.nik && s.date === dt);
+                                           if (existingIdx >= 0) {
+                                             const next = [...prev];
+                                             next[existingIdx] = { ...next[existingIdx], shift: newVal, bg_color: settings.shifts[newVal]?.bg || '#ffffff' };
+                                             return next;
+                                           }
+                                           return [...prev, {
+                                             date: dt,
+                                             nik: agent.nik,
+                                             nama: agent.nama,
+                                             tl: agent.tl || '',
+                                             channel,
+                                             shift: newVal,
+                                             bg_color: settings.shifts[newVal]?.bg || '#ffffff'
+                                           }];
+                                         });
+                                       }}
+                                     >
+                                       <option value="OFF">OFF</option>
+                                       {Object.keys(settings.shifts).filter(s => s !== "OFF").sort().map(s => (
+                                         <option key={s} value={s}>{s}</option>
+                                       ))}
+                                     </select>
+                                   </div>
+                                 </td>
+                               );
+                             });
+                          })()}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
           </div>
         ) : activeTab === "monthly" ? (
           <div className="flex flex-col gap-6 max-w-7xl mx-auto">
@@ -4168,7 +5207,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                 <table className="w-full text-left border-collapse min-w-[1000px]">
                   <thead>
                     <tr className="bg-slate-50">
-                      <th className="p-4 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider border-b border-slate-100 sticky left-0 bg-slate-50 z-20">
+                      <th className="p-4 text-[10px] font-extrabold text-slate-500 tracking-tight text-center capitalize border-b border-slate-100 sticky left-0 bg-slate-50 z-20">
                         Year / Month
                       </th>
                       {[
@@ -4187,12 +5226,12 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                       ].map((m) => (
                         <th
                           key={m}
-                          className="p-4 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider border-b border-slate-100 text-center"
+                          className="p-4 text-[11px] font-black text-slate-600 tracking-tight text-center capitalize border-b border-slate-100 text-center"
                         >
                           {m}
                         </th>
                       ))}
-                      <th className="p-4 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider border-b border-slate-100 text-right">
+                      <th className="p-4 text-[11px] font-black text-slate-600 tracking-tight text-center capitalize border-b border-slate-100 text-center">
                         Total
                       </th>
                     </tr>
@@ -4231,7 +5270,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                     : "-"}
                                 </td>
                               ))}
-                              <td className="p-4 text-xs font-bold text-slate-500 text-right bg-slate-100/50">
+                              <td className="p-4 text-xs font-bold text-slate-500 text-center bg-slate-100/50">
                                 {totalForecast.toLocaleString()}
                               </td>
                             </tr>
@@ -4239,7 +5278,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
 
                           {/* Actual Row */}
                           <tr className="hover:bg-slate-50 transition-colors border-b border-slate-50">
-                            <td className="p-4 text-xs font-bold text-slate-700 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                            <td className="p-4 text-xs font-extrabold text-slate-700 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] text-center capitalize">
                               <div className="flex flex-col">
                                 <span
                                   className={
@@ -4280,7 +5319,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                 )}
                               </td>
                             ))}
-                            <td className="p-4 text-xs font-extrabold text-indigo-600 text-right bg-indigo-50/30">
+                            <td className="p-4 text-xs font-extrabold text-indigo-600 text-center bg-indigo-50/30">
                               {totalActual.toLocaleString()}
                             </td>
                           </tr>
@@ -4302,7 +5341,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                 </td>
                               ))}
                               <td
-                                className={`p-4 text-[10px] font-bold text-right bg-slate-50/50 ${((totalActual - totalForecast) / totalForecast) * 100 >= 0 ? "text-emerald-500" : "text-rose-500"}`}
+                                className={`p-4 text-[10px] font-bold text-center bg-slate-50/50 ${((totalActual - totalForecast) / totalForecast) * 100 >= 0 ? "text-emerald-500" : "text-rose-500"}`}
                               >
                                 {totalForecast > 0
                                   ? `${(((totalActual - totalForecast) / totalForecast) * 100).toFixed(1)}%`
@@ -4365,7 +5404,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                   <table className="w-full text-left border-collapse min-w-[1000px]">
                     <thead>
                       <tr className="bg-slate-50">
-                        <th className="p-4 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider border-b border-slate-100 sticky left-0 bg-slate-50 z-20">
+                        <th className="p-4 text-[10px] font-extrabold text-slate-500 tracking-tight text-center capitalize border-b border-slate-100 sticky left-0 bg-slate-50 z-20">
                           Year / Month
                         </th>
                         {[
@@ -4374,12 +5413,12 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                         ].map((m) => (
                           <th
                             key={m}
-                            className="p-4 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider border-b border-slate-100 text-center"
+                            className="p-4 text-[11px] font-black text-slate-600 tracking-tight text-center capitalize border-b border-slate-100 text-center"
                           >
                             {m}
                           </th>
                         ))}
-                        <th className="p-4 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider border-b border-slate-100 text-right">
+                        <th className="p-4 text-[11px] font-black text-slate-600 tracking-tight text-center capitalize border-b border-slate-100 text-center">
                           Avg FTE
                         </th>
                       </tr>
@@ -4411,14 +5450,14 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                     {d.forecastHC > 0 ? d.forecastHC.toLocaleString() : "-"}
                                   </td>
                                 ))}
-                                <td className="p-4 text-xs font-black text-violet-800 text-right bg-violet-100/30">
+                                <td className="p-4 text-xs font-black text-violet-800 text-center bg-violet-100/30">
                                   {avgForecastHC > 0 ? avgForecastHC.toLocaleString() : "-"}
                                 </td>
                               </tr>
                             )}
                             {(hasActual || yearGroup.year === year) && (
                               <tr className="hover:bg-slate-50 transition-colors border-b border-slate-50">
-                                <td className="p-4 text-xs font-bold text-slate-700 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                                <td className="p-4 text-xs font-extrabold text-slate-700 sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] text-center capitalize">
                                   {yearGroup.year} Actual HC
                                 </td>
                                 {yearGroup.data.map((d: any, mIdx: number) => (
@@ -4429,7 +5468,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                     {d.actualHC > 0 ? d.actualHC.toLocaleString() : "-"}
                                   </td>
                                 ))}
-                                <td className="p-4 text-xs font-bold text-emerald-700 text-right bg-emerald-50/30">
+                                <td className="p-4 text-xs font-bold text-emerald-700 text-center bg-emerald-50/30">
                                   {avgActualHC > 0 ? avgActualHC.toLocaleString() : "-"}
                                 </td>
                               </tr>
@@ -4454,7 +5493,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                     </td>
                                   );
                                 })}
-                                <td className={`p-4 text-[10px] font-bold text-right bg-slate-50/50 ${avgActualHC - avgForecastHC >= 0 ? "text-emerald-500" : "text-rose-500"}`}>
+                                <td className={`p-4 text-[10px] font-bold text-center bg-slate-50/50 ${avgActualHC - avgForecastHC >= 0 ? "text-emerald-500" : "text-rose-500"}`}>
                                   {avgActualHC - avgForecastHC >= 0 ? "+" : ""}{avgActualHC - avgForecastHC}
                                 </td>
                               </tr>
@@ -4761,33 +5800,33 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                 <table className="w-full text-left border-collapse">
                   <thead className="sticky top-0 bg-slate-50 z-10 shadow-sm">
                     <tr className="bg-slate-50 border-b border-slate-100">
-                      <th className="p-4 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">
+                      <th className="p-4 text-[10px] font-extrabold text-slate-500 tracking-tight text-center capitalize">
                         {intervalViewMode === "interval" ? "Time" : "Date"}
                       </th>
                       {intervalViewMode === "interval" && (
-                         <th className="p-4 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">
+                         <th className="p-4 text-[10px] font-extrabold text-slate-500 tracking-tight text-center capitalize">
                           Date
                         </th>
                       )}
-                      <th className="p-4 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider text-center">
+                      <th className="p-4 text-[10px] font-extrabold text-slate-500 tracking-tight text-center capitalize">
                         Forecast Vol
                       </th>
-                      <th className="p-4 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider text-center">
+                      <th className="p-4 text-[10px] font-extrabold text-slate-500 tracking-tight text-center capitalize">
                         Actual Vol
                       </th>
-                      <th className="p-4 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider text-center">
+                      <th className="p-4 text-[10px] font-extrabold text-slate-500 tracking-tight text-center capitalize">
                         Diff
                       </th>
-                      <th className="p-4 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider text-center">
+                      <th className="p-4 text-[10px] font-extrabold text-slate-500 tracking-tight text-center capitalize">
                         Avg AHT
                       </th>
-                      <th className="p-4 text-[10px] font-extrabold text-indigo-600 bg-indigo-50/50 uppercase tracking-wider text-center">
+                      <th className="p-4 text-[10px] font-extrabold text-indigo-600 bg-indigo-50/50 tracking-tight text-center capitalize">
                         Agent Req (FTE)
                       </th>
-                      <th className="p-4 text-[10px] font-extrabold text-emerald-600 bg-emerald-50/50 uppercase tracking-wider text-center">
+                      <th className="p-4 text-[10px] font-extrabold text-emerald-600 bg-emerald-50/50 tracking-tight text-center capitalize">
                         Agent Actual
                       </th>
-                      <th className="p-4 text-[10px] font-extrabold text-slate-600 bg-slate-50/50 uppercase tracking-wider text-center">
+                      <th className="p-4 text-[10px] font-extrabold text-slate-600 bg-slate-50/50 tracking-tight text-center capitalize">
                         Gap
                       </th>
                     </tr>
@@ -4839,7 +5878,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                     )}
                     {processedIntervalViewData.length > 0 && (
                       <tr className="bg-indigo-50/70 border-t-2 border-indigo-100 font-black">
-                        <td className="p-4 text-[10px] text-indigo-700 uppercase tracking-widest">
+                        <td className="p-4 text-[10px] text-indigo-700 tracking-tight text-center capitalize">
                           {intervalViewMode === "interval" ? "TOTAL (DAY)" : "GRAND TOTAL"}
                         </td>
                         {intervalViewMode === "interval" && <td></td>}
@@ -5031,7 +6070,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                         <table className="w-full text-left border-collapse table-fixed min-w-[max-content]">
                           <thead className="sticky top-0 z-30">
                             <tr className="bg-slate-50 border-b border-slate-200">
-                              <th className="p-1 px-2 text-[8px] font-black text-slate-500 uppercase tracking-widest sticky left-0 bg-slate-50 z-40 w-16 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
+                              <th className="p-1 px-2 text-[8px] font-black text-slate-500 tracking-tight text-center capitalize sticky left-0 bg-slate-50 z-40 w-16 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
                                 Intrvl
                               </th>
                               {processedHistorical.map((row, idx) => {
@@ -5040,7 +6079,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                 return (
                                   <th
                                     key={idx}
-                                    className={`p-1 text-[8px] font-black uppercase tracking-widest text-center border-l border-slate-100 w-16 
+                                    className={`p-1 text-[8px] font-black tracking-tight text-center capitalize border-l border-slate-100 ${isWeekEnd || row.isHoliday ? "w-12" : "w-20"} 
                                       ${row.isHoliday ? "text-rose-500 bg-rose-50" : isWeekEnd ? "bg-slate-100 text-slate-500" : "text-slate-400 bg-slate-50"}`}
                                   >
                                     <div className="flex flex-col scale-[0.85] leading-tight">
@@ -5055,14 +6094,14 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                           <tbody className="divide-y divide-slate-50">
                             {/* Summary Harian Row (At Top) */}
                             <tr className="bg-indigo-50/70 font-black text-indigo-700 border-b-2 border-slate-200">
-                              <td className="p-1 px-2 text-[8px] uppercase sticky left-0 bg-indigo-50 z-10 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
+                              <td className="p-1 px-2 text-[8px] text-center capitalize sticky left-0 bg-indigo-50 z-10 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
                                 TOTAL
                               </td>
                               {processedHistorical.map((row, idx) => {
                                 const dayNum = new Date(row.date).getUTCDay();
                                 const isWeekEnd = dayNum === 0 || dayNum === 6;
                                 return (
-                                  <td key={idx} className={`p-1 text-center text-[9px] border-l border-indigo-100/30 ${row.isHoliday ? "bg-rose-50/50" : isWeekEnd ? "bg-slate-100/50" : ""}`}>
+                                  <td key={idx} className={`p-1 text-center text-[9px] border-l border-slate-100 ${isWeekEnd || row.isHoliday ? "w-12 bg-slate-50/50" : "w-20"} ${row.isHoliday ? "bg-rose-50/30" : ""}`}>
                                     {row.totalVolume.toLocaleString()}
                                   </td>
                                 );
@@ -5086,8 +6125,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                       return (
                                         <td 
                                           key={dIdx} 
-                                          className={`p-1 text-center text-[9px] border-l border-slate-50 font-bold tracking-tighter
-                                            ${dateRow.isHoliday ? "bg-rose-50/30" : isWeekEnd ? "bg-slate-50/80" : ""}
+                                          className={`p-1 text-center text-[9px] border-l border-slate-50 font-bold tracking-tighter ${isWeekEnd || dateRow.isHoliday ? "w-12 bg-slate-50/30" : "w-20"}
                                             ${val > 0 ? "text-slate-700" : "text-slate-200"}`}
                                         >
                                           {val > 0 ? val.toLocaleString() : "-"}
@@ -5117,7 +6155,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                         <table className="w-full text-left border-collapse table-fixed min-w-[max-content]">
                           <thead className="sticky top-0 z-30">
                             <tr className="bg-slate-50 border-b border-slate-200">
-                              <th className="p-1 px-2 text-[8px] font-black text-slate-500 uppercase tracking-widest sticky left-0 bg-slate-50 z-40 w-16 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
+                              <th className="p-1 px-2 text-[8px] font-black text-slate-500 tracking-tight text-center capitalize sticky left-0 bg-slate-50 z-40 w-16 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
                                 Intrvl
                               </th>
                               {processedHistorical.map((row, idx) => {
@@ -5126,7 +6164,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                 return (
                                   <th
                                     key={idx}
-                                    className={`p-1 text-[8px] font-black uppercase tracking-widest text-center border-l border-slate-100 w-16 
+                                    className={`p-1 text-[8px] font-black tracking-tight text-center capitalize border-l border-slate-100 ${isWeekEnd || row.isHoliday ? "w-12" : "w-20"} 
                                       ${row.isHoliday ? "text-rose-500 bg-rose-50" : isWeekEnd ? "bg-slate-100 text-slate-500" : "text-slate-400 bg-slate-50"}`}
                                   >
                                     <div className="flex flex-col scale-[0.85] leading-tight">
@@ -5141,14 +6179,14 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                           <tbody className="divide-y divide-slate-50">
                             {/* Summary Harian Row (At Top) */}
                             <tr className="bg-violet-50/70 font-black text-violet-700 border-b-2 border-slate-200">
-                              <td className="p-1 px-2 text-[8px] uppercase sticky left-0 bg-violet-50 z-10 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
+                              <td className="p-1 px-2 text-[8px] text-center capitalize sticky left-0 bg-violet-50 z-10 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
                                 TOTAL
                               </td>
                               {processedHistorical.map((row, idx) => {
                                 const dayNum = new Date(row.date).getUTCDay();
                                 const isWeekEnd = dayNum === 0 || dayNum === 6;
                                 return (
-                                  <td key={idx} className={`p-1 text-center text-[9px] border-l border-violet-100/30 ${row.isHoliday ? "bg-rose-50/50" : isWeekEnd ? "bg-slate-100/50" : ""}`}>
+                                  <td key={idx} className={`p-1 text-center text-[9px] border-l border-slate-100 ${isWeekEnd || row.isHoliday ? "w-12 bg-slate-50/50" : "w-20"} ${row.isHoliday ? "bg-rose-50/30" : ""}`}>
                                     {row.totalForecast?.toLocaleString() || "0"}
                                   </td>
                                 );
@@ -5172,8 +6210,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                       return (
                                         <td 
                                           key={dIdx} 
-                                          className={`p-1 text-center text-[9px] border-l border-slate-50 font-bold tracking-tighter
-                                            ${dateRow.isHoliday ? "bg-rose-50/30" : isWeekEnd ? "bg-slate-50/80" : ""}
+                                          className={`p-1 text-center text-[9px] border-l border-slate-50 font-bold tracking-tighter ${isWeekEnd || dateRow.isHoliday ? "w-12 bg-slate-50/30" : "w-20"}
                                             ${val > 0 ? "text-violet-600" : "text-slate-200"}`}
                                         >
                                           {val > 0 ? val.toLocaleString() : "-"}
@@ -5203,7 +6240,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                         <table className="w-full text-left border-collapse table-fixed min-w-[max-content]">
                           <thead className="sticky top-0 z-30">
                             <tr className="bg-slate-50 border-b border-slate-200">
-                              <th className="p-1 px-2 text-[8px] font-black text-slate-500 uppercase tracking-widest sticky left-0 bg-slate-50 z-40 w-16 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
+                              <th className="p-1 px-2 text-[8px] font-black text-slate-500 tracking-tight text-center capitalize sticky left-0 bg-slate-50 z-40 w-16 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
                                 Intrvl
                               </th>
                               {processedHistorical.map((row, idx) => {
@@ -5212,7 +6249,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                 return (
                                   <th
                                     key={idx}
-                                    className={`p-1 text-[8px] font-black uppercase tracking-widest text-center border-l border-slate-100 w-16 
+                                    className={`p-1 text-[8px] font-black tracking-tight text-center capitalize border-l border-slate-100 ${isWeekEnd || row.isHoliday ? "w-12" : "w-20"} 
                                       ${row.isHoliday ? "text-rose-500 bg-rose-50" : isWeekEnd ? "bg-slate-100 text-slate-500" : "text-slate-400 bg-slate-50"}`}
                                   >
                                     <div className="flex flex-col scale-[0.85] leading-tight">
@@ -5244,8 +6281,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                       return (
                                         <td 
                                           key={dIdx} 
-                                          className={`p-1 text-center text-[9px] border-l border-slate-50 font-bold tracking-tighter
-                                            ${dateRow.isHoliday ? "bg-rose-50/30" : isWeekEnd ? "bg-slate-50/80" : ""}
+                                          className={`p-1 text-center text-[9px] border-l border-slate-50 font-bold tracking-tighter ${isWeekEnd || dateRow.isHoliday ? "w-12 bg-slate-50/30" : "w-20"}
                                             ${pct > 0 ? "text-amber-600" : "text-slate-200"}`}
                                         >
                                           {pct > 0 ? `${pct.toFixed(2)}%` : "-"}
@@ -5275,7 +6311,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                         <table className="w-full text-left border-collapse table-fixed min-w-[max-content]">
                           <thead className="sticky top-0 z-30">
                             <tr className="bg-slate-50 border-b border-slate-200">
-                              <th className="p-1 px-2 text-[8px] font-black text-slate-500 uppercase tracking-widest sticky left-0 bg-slate-50 z-40 w-16 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
+                              <th className="p-1 px-2 text-[8px] font-black text-slate-500 tracking-tight text-center capitalize sticky left-0 bg-slate-50 z-40 w-16 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
                                 Intrvl
                               </th>
                               {processedHistorical.map((row, idx) => {
@@ -5284,7 +6320,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                 return (
                                   <th
                                     key={idx}
-                                    className={`p-1 text-[8px] font-black uppercase tracking-widest text-center border-l border-slate-100 w-16 
+                                    className={`p-1 text-[8px] font-black tracking-tight text-center capitalize border-l border-slate-100 ${isWeekEnd || row.isHoliday ? "w-12" : "w-20"} 
                                       ${row.isHoliday ? "text-rose-500 bg-rose-50" : isWeekEnd ? "bg-slate-100 text-slate-500" : "text-slate-400 bg-slate-50"}`}
                                   >
                                     <div className="flex flex-col scale-[0.85] leading-tight">
@@ -5299,7 +6335,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                           <tbody className="divide-y divide-slate-50">
                             {/* Summary AHT Harian Row (At Top) */}
                             <tr className="bg-emerald-50/70 font-black text-emerald-700 border-b-2 border-slate-200">
-                              <td className="p-1 px-2 text-[8px] uppercase sticky left-0 bg-emerald-50 z-10 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
+                              <td className="p-1 px-2 text-[8px] text-center capitalize sticky left-0 bg-emerald-50 z-10 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
                                 AVG AHT
                               </td>
                               {processedHistorical.map((row, idx) => {
@@ -5309,7 +6345,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                 const dayAhtCount: number = Object.values(row.bins).reduce<number>((sum, b: any) => sum + b.ahtCount, 0);
                                 const dayAvgAht = dayAhtCount > 0 ? Math.round(dayTotalAht / dayAhtCount) : 0;
                                 return (
-                                  <td key={idx} className={`p-1 text-center text-[9px] border-l border-emerald-100/30 ${row.isHoliday ? "bg-rose-50/50" : isWeekEnd ? "bg-slate-100/50" : ""}`}>
+                                  <td key={idx} className={`p-1 text-center text-[9px] border-l border-slate-100 ${isWeekEnd || row.isHoliday ? "w-12 bg-slate-50/50" : "w-20"} ${row.isHoliday ? "bg-rose-50/30" : ""}`}>
                                     {dayAvgAht > 0 ? `${dayAvgAht}s` : "-"}
                                   </td>
                                 );
@@ -5334,8 +6370,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                       return (
                                         <td 
                                           key={dIdx} 
-                                          className={`p-1 text-center text-[9px] border-l border-slate-50 font-bold tracking-tighter
-                                            ${dateRow.isHoliday ? "bg-rose-50/30" : isWeekEnd ? "bg-slate-50/80" : ""}
+                                          className={`p-1 text-center text-[9px] border-l border-slate-50 font-bold tracking-tighter ${isWeekEnd || dateRow.isHoliday ? "w-12 bg-slate-50/30" : "w-20"}
                                             ${avgAht > 0 ? "text-emerald-700" : "text-slate-200"}`}
                                         >
                                           {avgAht > 0 ? `${avgAht}s` : "-"}
@@ -5365,7 +6400,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                         <table className="w-full text-left border-collapse table-fixed min-w-[max-content]">
                           <thead className="sticky top-0 z-30">
                             <tr className="bg-slate-50 border-b border-slate-200">
-                              <th className="p-1 px-2 text-[8px] font-black text-slate-500 uppercase tracking-widest sticky left-0 bg-slate-50 z-40 w-16 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
+                              <th className="p-1 px-2 text-[8px] font-black text-slate-500 tracking-tight text-center capitalize sticky left-0 bg-slate-50 z-40 w-16 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
                                 Intrvl
                               </th>
                               {processedHistorical.map((row, idx) => {
@@ -5374,7 +6409,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                 return (
                                   <th
                                     key={idx}
-                                    className={`p-1 text-[8px] font-black uppercase tracking-widest text-center border-l border-slate-100 w-16 
+                                    className={`p-1 text-[8px] font-black tracking-tight text-center capitalize border-l border-slate-100 ${isWeekEnd || row.isHoliday ? "w-12" : "w-20"} 
                                       ${row.isHoliday ? "text-rose-500 bg-rose-50" : isWeekEnd ? "bg-slate-100 text-slate-500" : "text-slate-400 bg-slate-50"}`}
                                   >
                                     <div className="flex flex-col scale-[0.85] leading-tight">
@@ -5389,7 +6424,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                           <tbody className="divide-y divide-slate-50">
                             {/* Summary FTE Harian Row (At Top) */}
                             <tr className="bg-indigo-50/70 font-black text-indigo-700 border-b-2 border-slate-200">
-                              <td className="p-1 px-2 text-[8px] uppercase sticky left-0 bg-indigo-50 z-10 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
+                              <td className="p-1 px-2 text-[8px] text-center capitalize sticky left-0 bg-indigo-50 z-10 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
                                 TOTAL FTE
                               </td>
                               {processedHistorical.map((row, idx) => {
@@ -5401,7 +6436,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                 const fteNeed = Math.ceil((row as any).totalAgentHours / (effCapacity || 1));
                                 
                                 return (
-                                  <td key={idx} className={`p-1 text-center text-[9px] border-l border-indigo-100/30 ${row.isHoliday ? "bg-rose-50/50" : isWeekEnd ? "bg-slate-100/50" : ""}`}>
+                                  <td key={idx} className={`p-1 text-center text-[9px] border-l border-slate-100 ${isWeekEnd || row.isHoliday ? "w-12 bg-slate-50/50" : "w-20"} ${row.isHoliday ? "bg-rose-50/30" : ""}`}>
                                     {fteNeed > 0 ? fteNeed : "-"}
                                   </td>
                                 );
@@ -5426,8 +6461,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                       return (
                                         <td 
                                           key={dIdx} 
-                                          className={`p-1 text-center text-[9px] border-l border-slate-50 font-bold tracking-tighter
-                                            ${dateRow.isHoliday ? "bg-rose-50/30" : isWeekEnd ? "bg-slate-50/80" : ""}
+                                          className={`p-1 text-center text-[9px] border-l border-slate-50 font-bold tracking-tighter ${isWeekEnd || dateRow.isHoliday ? "w-12 bg-slate-50/30" : "w-20"}
                                             ${agentNeed !== null && agentNeed > 0 ? "text-indigo-700" : "text-slate-200"}`}
                                         >
                                           {agentNeed !== null && agentNeed > 0 ? agentNeed : "-"}
@@ -5457,7 +6491,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                         <table className="w-full text-left border-collapse table-fixed min-w-[max-content]">
                           <thead className="sticky top-0 z-30">
                             <tr className="bg-slate-50 border-b border-slate-200">
-                              <th className="p-1 px-2 text-[8px] font-black text-slate-500 uppercase tracking-widest sticky left-0 bg-slate-50 z-40 w-16 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
+                              <th className="p-1 px-2 text-[8px] font-black text-slate-500 tracking-tight text-center capitalize sticky left-0 bg-slate-50 z-40 w-16 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
                                 Intrvl
                               </th>
                               {processedHistorical.map((row, idx) => {
@@ -5466,7 +6500,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                 return (
                                   <th
                                     key={idx}
-                                    className={`p-1 text-[8px] font-black uppercase tracking-widest text-center border-l border-slate-100 w-16 
+                                    className={`p-1 text-[8px] font-black tracking-tight text-center capitalize border-l border-slate-100 ${isWeekEnd || row.isHoliday ? "w-12" : "w-20"} 
                                       ${row.isHoliday ? "text-rose-500 bg-rose-50" : isWeekEnd ? "bg-slate-100 text-slate-500" : "text-slate-400 bg-slate-50"}`}
                                   >
                                     <div className="flex flex-col scale-[0.85] leading-tight">
@@ -5481,7 +6515,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                           <tbody className="divide-y divide-slate-50">
                             {/* Summary Actual agents count */}
                             <tr className="bg-emerald-50/70 font-black text-emerald-700 border-b-2 border-slate-200">
-                              <td className="p-1 px-2 text-[8px] uppercase sticky left-0 bg-emerald-50 z-10 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
+                              <td className="p-1 px-2 text-[8px] text-center capitalize sticky left-0 bg-emerald-50 z-10 shadow-[1px_0_3px_rgba(0,0,0,0.05)]">
                                 AGENTS
                               </td>
                               {processedHistorical.map((row, idx) => {
@@ -5490,7 +6524,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                 const fteActual = Math.ceil((row as any).totalActualHours / 9);
                                 
                                 return (
-                                  <td key={idx} className={`p-1 text-center text-[9px] border-l border-emerald-100/30 ${row.isHoliday ? "bg-rose-50/50" : isWeekEnd ? "bg-slate-100/50" : ""}`}>
+                                  <td key={idx} className={`p-1 text-center text-[9px] border-l border-slate-100 ${isWeekEnd || row.isHoliday ? "w-12 bg-slate-50/50" : "w-20"} ${row.isHoliday ? "bg-rose-50/30" : ""}`}>
                                     {fteActual > 0 ? fteActual : "-"}
                                   </td>
                                 );
@@ -5515,8 +6549,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                       return (
                                         <td 
                                           key={dIdx} 
-                                          className={`p-1 text-center text-[9px] border-l border-slate-50 font-bold tracking-tighter
-                                            ${dateRow.isHoliday ? "bg-rose-50/30" : isWeekEnd ? "bg-slate-50/80" : ""}
+                                          className={`p-1 text-center text-[9px] border-l border-slate-50 font-bold tracking-tighter ${isWeekEnd || dateRow.isHoliday ? "w-12 bg-slate-50/30" : "w-20"}
                                             ${agentActual > 0 ? "text-emerald-700" : "text-slate-200"}`}
                                         >
                                           {agentActual > 0 ? agentActual : "-"}
