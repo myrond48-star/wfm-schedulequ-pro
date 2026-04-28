@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { format, parseISO } from 'date-fns';
 import { Logo } from './Logo';
 import { useAppStore } from '../lib/store';
 import { callSupabaseAPI } from '../lib/supabase';
@@ -89,8 +90,22 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
   const processedRows = React.useMemo(() => {
     const rows: any[] = [];
     data.forEach(r => {
-      // Add S4 Prev row if applicable
-      if (r.shift_prev === 'S4') {
+      // Add Prev row if applicable (Overnight shift from yesterday)
+      let needsPrevRow = false;
+      if (r.shift_prev && r.shift_prev !== 'OFF') {
+        const sInfo = settings.shifts[r.shift_prev];
+        if (sInfo) {
+          const parseT = (t: string) => {
+            const [h, m] = t.split(':').map(Number);
+            return h * 4 + Math.floor(m / 15);
+          };
+          if (parseT(sInfo.e) <= parseT(sInfo.s)) {
+            needsPrevRow = true;
+          }
+        }
+      }
+
+      if (needsPrevRow) {
         rows.push({ ...r, isPrev: true, sortW: 0 });
       }
       // Add regular row
@@ -110,7 +125,7 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
         return matchesTL && matchesSearch;
       })
       .sort((a, b) => {
-        // Always prioritize S4 Prev (isPrev) to the very top
+        // Always prioritize Overnight Prev (isPrev) to the very top
         if (a.isPrev !== b.isPrev) return a.isPrev ? -1 : 1;
         
         if (sortBy === 'nama') return (a.nama || '').localeCompare(b.nama || '');
@@ -125,18 +140,65 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
     const fetchData = async () => {
       setLoading(true);
       try {
-        const [res, demoRes, reqRes, reasonsRes, forRes] = await Promise.all([
+        const yesterdayDate = new Date(date + 'T00:00:00');
+        yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+        const yesterday = format(yesterdayDate, 'yyyy-MM-dd');
+
+        const [res, yesterdayRes, demoRes, reqRes, reasonsRes, forRes] = await Promise.all([
           callSupabaseAPI('wfm_schedules', 'GET', undefined, `?date=eq.${date}&channel=eq.${encodeURIComponent(channel)}&select=*`),
+          callSupabaseAPI('wfm_schedules', 'GET', undefined, `?date=eq.${yesterday}&channel=eq.${encodeURIComponent(channel)}&select=*`),
           callSupabaseAPI('wfm_agents', 'GET', undefined, `?select=nik,religion,gender`),
           callSupabaseAPI('wfm_requirements', 'GET', undefined, `?date=eq.${date}&channel=eq.${encodeURIComponent(channel)}&select=requirements`).catch(() => null),
           callSupabaseAPI('wfm_activity_reasons', 'GET', undefined, `?date_str=eq.${date}&select=*`).catch(() => null),
           callSupabaseAPI('wfm_traffic_forecast', 'GET', undefined, `?channel=eq.${channel}&timestamp=gte.${date}T00:00:00Z&timestamp=lte.${date}T23:59:59Z&type=eq.interval_agents&select=timestamp,volume`).catch(() => null)
         ]);
 
-        if (res) {
-          setData(res);
-          // Derived leaders from schedule
-          const scheduleLeaders = Array.from(new Set(res.map((r: any) => r.tl).filter(Boolean))).sort() as string[];
+        if (res || yesterdayRes) {
+          const todayRes = res || [];
+          const yRes = yesterdayRes || [];
+          
+          const yesterdayMap: Record<string, any> = {};
+          yRes.forEach((yr: any) => {
+            yesterdayMap[yr.nik] = yr;
+          });
+
+          // Create a set of all NIKs involved (today or yesterday S4)
+          const allNiks = new Set([
+            ...todayRes.map((r: any) => r.nik),
+            ...yRes.filter((yr: any) => {
+              const sInfo = settings.shifts[yr.shift];
+              return sInfo && sInfo.s > sInfo.e;
+            }).map((yr: any) => yr.nik)
+          ]);
+
+          const combinedData = Array.from(allNiks).map(nik => {
+            const todaySchedule = todayRes.find((r: any) => r.nik === nik);
+            const yr = yesterdayMap[nik];
+            
+            if (todaySchedule) {
+              return {
+                ...todaySchedule,
+                shift_prev: yr?.shift || 'OFF',
+                prevActivities: yr?.activities || {}
+              };
+            } else {
+              // Agent only had a shift yesterday (tailing into today)
+              return {
+                nik,
+                nama: yr?.nama || 'Unknown',
+                tl: yr?.tl || '',
+                channel: channel,
+                date: date,
+                shift: 'OFF',
+                shift_prev: yr?.shift || 'OFF',
+                prevActivities: yr?.activities || {},
+                activities: {}
+              };
+            }
+          });
+
+          setData(combinedData);
+          const scheduleLeaders = Array.from(new Set(combinedData.map((r: any) => r.tl).filter(Boolean))).sort() as string[];
           setLeaders(scheduleLeaders);
         } else {
           setData([]);
@@ -464,26 +526,51 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
         const activities = { ...(r.activities || {}) };
         let changed = false;
 
-        // 1. Handle S4 Prev (00:00 - 07:00)
-        if (r.shift_prev === 'S4') {
-          const hasPrevBreak = Object.entries(activities).some(([idx, v]) => Number(idx) < 28 && isBreakCode(v));
-          if (isReAuto || !hasPrevBreak) {
-            const rules = (settings.autoBreak['S4'] || []).filter(t => {
-              const h = parseInt(t.split(':')[0]);
-              return h < 7;
-            });
-            const bIdx = findBestDistributedBreakIdx(reqs, activities, rules, breakCounter);
-            if (bIdx !== null) {
-              for (let i = bIdx; i < bIdx + 4; i++) if (i < 28) activities[i] = 'LB';
-              changed = true;
-              breakCounter[bIdx] = (breakCounter[bIdx] || 0) + 1;
+        // 1. Handle Prev Shift (Overnight from yesterday)
+        if (r.shift_prev && r.shift_prev !== 'OFF') {
+          const sInfo = settings.shifts[r.shift_prev];
+          if (sInfo) {
+            const parseT = (t: string) => {
+              const [h, m] = t.split(':').map(Number);
+              return h * 4 + Math.floor(m / 15);
+            };
+            const eIdx = parseT(sInfo.e);
+            const sIdx = parseT(sInfo.s);
+
+            if (eIdx <= sIdx) {
+              const hasPrevBreak = Object.entries(activities).some(([idx, v]) => Number(idx) < eIdx && isBreakCode(v));
+              if (isReAuto || !hasPrevBreak) {
+                const rules = (settings.autoBreak[r.shift_prev] || []).filter(t => {
+                  const h = parseInt(t.split(':')[0]);
+                  return h < (eIdx / 4);
+                });
+                const bIdx = findBestDistributedBreakIdx(reqs, activities, rules, breakCounter);
+                if (bIdx !== null) {
+                  for (let i = bIdx; i < bIdx + 4; i++) if (i < eIdx) activities[i] = 'LB';
+                  changed = true;
+                  breakCounter[bIdx] = (breakCounter[bIdx] || 0) + 1;
+                }
+              }
             }
           }
         }
 
-        // 2. Handle Current Shift (excluding S4 start part)
-        if (r.shift !== 'OFF' && r.shift !== 'S4' && settings.shifts[r.shift]) {
-          const hasCurrentBreak = Object.entries(activities).some(([idx, v]) => Number(idx) >= 28 && isBreakCode(v));
+        // 2. Handle Current Shift (excluding start part of overnight shifts)
+        const currentShiftInfo = settings.shifts[r.shift];
+        if (r.shift !== 'OFF' && currentShiftInfo) {
+          const parseT = (t: string) => {
+            const [h, m] = t.split(':').map(Number);
+            return h * 4 + Math.floor(m / 15);
+          };
+          const startIdx = parseT(currentShiftInfo.s);
+          const endIdx = parseT(currentShiftInfo.e);
+          const isOvernight = endIdx <= startIdx;
+
+          const threshold = isOvernight ? 0 : startIdx; 
+          // Note: If yesterday was overnight, we already handled 0..eIdx_prev.
+          // This block handles the "main" part of today's shift.
+
+          const hasCurrentBreak = Object.entries(activities).some(([idx, v]) => Number(idx) >= threshold && isBreakCode(v));
           if (isReAuto || !hasCurrentBreak) {
             const demo = demographics[r.nik] || {};
             const rel = (demo.religion || '').toUpperCase();
@@ -659,9 +746,19 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
     const counts = Array(96).fill(0);
     processedRows.forEach(row => {
       let startIdx = -1, endIdx = -1;
+      let activities = row.activities || {};
+
       if (row.isPrev) {
-        startIdx = 0;
-        endIdx = 28; // 07:00
+        const sInfo = settings.shifts[row.shift_prev];
+        if (sInfo) {
+          const parseTime = (t: string) => {
+            const [h, m] = t.split(':').map(Number);
+            return h * 4 + Math.floor(m / 15);
+          };
+          startIdx = 0;
+          endIdx = parseTime(sInfo.e);
+          activities = row.prevActivities || {};
+        }
       } else {
         const shiftInfo = settings.shifts[row.shift];
         if (shiftInfo) {
@@ -677,7 +774,7 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
 
       for (let i = 0; i < 96; i++) {
         const isWithinShift = startIdx <= i && i < endIdx;
-        if (row.activities?.[i] === '1' || (isWithinShift && row.activities?.[i] === undefined)) {
+        if (activities[i] === '1' || (isWithinShift && activities[i] === undefined)) {
           counts[i]++;
         }
       }
@@ -720,17 +817,39 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
                   );
                 })}
               </tr>
+              {/* Req Distribution % */}
+              <tr className="bg-slate-50/50">
+                <th className="sticky top-[32px] left-0 z-[110] bg-slate-50/50 w-[30px] h-[32px]"></th>
+                <th className="sticky top-[32px] left-[30px] z-[110] bg-slate-50/50 w-[65px] h-[32px]"></th>
+                <th className="sticky top-[32px] left-[95px] z-[110] bg-slate-50/50 w-[120px] h-[32px]"></th>
+                <th className="sticky top-[32px] left-[215px] z-[110] bg-slate-50/50 w-[55px] h-[32px]"></th>
+                <th className="sticky top-[32px] left-[270px] z-[110] bg-slate-50/50 w-[90px] h-[32px] text-left pl-3 text-[8px] text-slate-400 font-bold uppercase tracking-tighter">REQ DIST %</th>
+                {(() => {
+                  const totalReq = reqs.reduce((a, b) => a + b, 0);
+                  return reqs.map((v, i) => {
+                    const dist = totalReq > 0 ? (v / totalReq) * 100 : 0;
+                    return (
+                      <th 
+                        key={i} 
+                        className="sticky top-[32px] z-[100] bg-slate-50/50 min-w-[18px] w-[18px] text-[7.5px] text-slate-400 font-medium italic"
+                      >
+                        {dist > 0 ? dist.toFixed(1) : '-'}
+                      </th>
+                    );
+                  });
+                })()}
+              </tr>
               {/* Actual Online */}
               <tr className="bg-white">
-                <th className="sticky top-[32px] left-0 z-[110] bg-white w-[30px] h-[32px]"></th>
-                <th className="sticky top-[32px] left-[30px] z-[110] bg-white w-[65px] h-[32px]"></th>
-                <th className="sticky top-[32px] left-[95px] z-[110] bg-white w-[120px] h-[32px]"></th>
-                <th className="sticky top-[32px] left-[215px] z-[110] bg-white w-[55px] h-[32px]"></th>
-                <th className="sticky top-[32px] left-[270px] z-[110] bg-white w-[90px] h-[32px] text-left pl-3 text-[9px] text-slate-600 font-semibold">ACTUAL ONLINE</th>
+                <th className="sticky top-[64px] left-0 z-[110] bg-white w-[30px] h-[32px]"></th>
+                <th className="sticky top-[64px] left-[30px] z-[110] bg-white w-[65px] h-[32px]"></th>
+                <th className="sticky top-[64px] left-[95px] z-[110] bg-white w-[120px] h-[32px]"></th>
+                <th className="sticky top-[64px] left-[215px] z-[110] bg-white w-[55px] h-[32px]"></th>
+                <th className="sticky top-[64px] left-[270px] z-[110] bg-white w-[90px] h-[32px] text-left pl-3 text-[9px] text-slate-600 font-semibold">ACTUAL ONLINE</th>
                 {actuals.map((v, i) => (
                   <th 
                     key={i} 
-                    className="sticky top-[32px] z-[100] bg-white min-w-[18px] w-[18px] text-[9px] text-slate-700 font-medium"
+                    className="sticky top-[64px] z-[100] bg-white min-w-[18px] w-[18px] text-[9px] text-slate-700 font-medium"
                     onMouseEnter={(e) => handleMouseEnter(e, <div className="font-bold text-green-300">Actual: {v} agents</div>)}
                     onMouseMove={handleMouseMove}
                     onMouseLeave={handleMouseLeave}
@@ -741,18 +860,18 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
               </tr>
               {/* Coverage Gap */}
               <tr className="bg-white">
-                <th className="sticky top-[64px] left-0 z-[110] bg-white w-[30px] h-[32px]"></th>
-                <th className="sticky top-[64px] left-[30px] z-[110] bg-white w-[65px] h-[32px]"></th>
-                <th className="sticky top-[64px] left-[95px] z-[110] bg-white w-[120px] h-[32px]"></th>
-                <th className="sticky top-[64px] left-[215px] z-[110] bg-white w-[55px] h-[32px]"></th>
-                <th className="sticky top-[64px] left-[270px] z-[110] bg-white w-[90px] h-[32px] text-left pl-3 text-[9px] text-slate-600 font-semibold border-b border-slate-200">COVERAGE GAP</th>
+                <th className="sticky top-[96px] left-0 z-[110] bg-white w-[30px] h-[32px]"></th>
+                <th className="sticky top-[96px] left-[30px] z-[110] bg-white w-[65px] h-[32px]"></th>
+                <th className="sticky top-[96px] left-[95px] z-[110] bg-white w-[120px] h-[32px]"></th>
+                <th className="sticky top-[96px] left-[215px] z-[110] bg-white w-[55px] h-[32px]"></th>
+                <th className="sticky top-[96px] left-[270px] z-[110] bg-white w-[90px] h-[32px] text-left pl-3 text-[9px] text-slate-600 font-semibold border-b border-slate-200">COVERAGE GAP</th>
                 {actuals.map((v, i) => {
                   const gap = v - reqs[i];
                   const gapClass = gap < 0 ? 'bg-red-50 text-red-600 font-semibold' : gap > 0 ? 'bg-green-50 text-green-600 font-semibold' : '';
                   return (
                     <th 
                       key={i} 
-                      className={`sticky top-[64px] z-[100] bg-white min-w-[18px] w-[18px] text-[9px] text-slate-700 font-medium border-b border-slate-200 ${gapClass}`}
+                      className={`sticky top-[96px] z-[100] bg-white min-w-[18px] w-[18px] text-[9px] text-slate-700 font-medium border-b border-slate-200 ${gapClass}`}
                       onMouseEnter={(e) => handleMouseEnter(e, <div className={`font-bold ${gap < 0 ? 'text-red-300' : 'text-green-300'}`}>Gap: {gap > 0 ? '+' : ''}{gap}</div>)}
                       onMouseMove={handleMouseMove}
                       onMouseLeave={handleMouseLeave}
@@ -764,26 +883,26 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
               </tr>
               {/* Hour Row */}
               <tr className="bg-slate-50">
-                <th className="sticky top-[96px] left-0 z-[110] bg-slate-50 w-[30px] h-[22px]"></th>
-                <th className="sticky top-[96px] left-[30px] z-[110] bg-slate-50 w-[65px] h-[22px]"></th>
-                <th className="sticky top-[96px] left-[95px] z-[110] bg-slate-50 w-[120px] h-[22px]"></th>
-                <th className="sticky top-[96px] left-[215px] z-[110] bg-slate-50 w-[55px] h-[22px]"></th>
-                <th className="sticky top-[96px] left-[270px] z-[110] bg-slate-50 w-[90px] h-[22px] text-left pl-3 text-[9px] text-slate-600 font-bold border-b border-slate-300">INTERVAL</th>
+                <th className="sticky top-[128px] left-0 z-[110] bg-slate-50 w-[30px] h-[22px]"></th>
+                <th className="sticky top-[128px] left-[30px] z-[110] bg-slate-50 w-[65px] h-[22px]"></th>
+                <th className="sticky top-[128px] left-[95px] z-[110] bg-slate-50 w-[120px] h-[22px]"></th>
+                <th className="sticky top-[128px] left-[215px] z-[110] bg-slate-50 w-[55px] h-[22px]"></th>
+                <th className="sticky top-[128px] left-[270px] z-[110] bg-slate-50 w-[90px] h-[22px] text-left pl-3 text-[9px] text-slate-600 font-bold border-b border-slate-300">INTERVAL</th>
                 {intervals.filter((_, i) => i % 4 === 0).map((t, i) => (
-                  <th key={i} colSpan={4} className="sticky top-[96px] z-[100] bg-slate-50 min-w-[72px] w-[72px] text-[9px] text-slate-700 font-bold border-b border-slate-300">{t.split(':')[0]}:00</th>
+                  <th key={i} colSpan={4} className="sticky top-[128px] z-[100] bg-slate-50 min-w-[72px] w-[72px] text-[9px] text-slate-700 font-bold border-b border-slate-300">{t.split(':')[0]}:00</th>
                 ))}
               </tr>
               {/* Header Row */}
               <tr className="bg-slate-100">
-                <th className="sticky top-[118px] left-0 z-[110] bg-slate-100 w-[30px] h-[22px] text-[8px] text-slate-600 font-bold border-b-2 border-slate-300">NO</th>
-                <th className="sticky top-[118px] left-[30px] z-[110] bg-slate-100 w-[65px] h-[22px] text-[8px] text-slate-600 font-bold border-b-2 border-slate-300">NIK</th>
-                <th className="sticky top-[118px] left-[95px] z-[110] bg-slate-100 w-[120px] h-[22px] text-[8px] text-slate-600 font-bold border-b-2 border-slate-300 border-r-2 border-r-slate-300 text-left pl-3">AGENT NAME</th>
-                <th className="sticky top-[118px] left-[215px] z-[110] bg-slate-100 w-[55px] h-[22px] text-[8px] text-slate-600 font-bold border-b-2 border-slate-300">SHIFT</th>
-                <th className="sticky top-[118px] left-[270px] z-[110] bg-slate-100 w-[90px] h-[22px] text-[8px] text-slate-600 font-bold border-b-2 border-slate-300 border-r-2 border-r-slate-300">TIME</th>
+                <th className="sticky top-[150px] left-0 z-[110] bg-slate-100 w-[30px] h-[22px] text-[8px] text-slate-600 font-bold border-b-2 border-slate-300">NO</th>
+                <th className="sticky top-[150px] left-[30px] z-[110] bg-slate-100 w-[65px] h-[22px] text-[8px] text-slate-600 font-bold border-b-2 border-slate-300">NIK</th>
+                <th className="sticky top-[150px] left-[95px] z-[110] bg-slate-100 w-[120px] h-[22px] text-[8px] text-slate-600 font-bold border-b-2 border-slate-300 border-r-2 border-r-slate-300 text-left pl-3">AGENT NAME</th>
+                <th className="sticky top-[150px] left-[215px] z-[110] bg-slate-100 w-[55px] h-[22px] text-[8px] text-slate-600 font-bold border-b-2 border-slate-300">SHIFT</th>
+                <th className="sticky top-[150px] left-[270px] z-[110] bg-slate-100 w-[90px] h-[22px] text-[8px] text-slate-600 font-bold border-b-2 border-slate-300 border-r-2 border-r-slate-300">TIME</th>
                 {intervals.map((t, i) => {
                   const operational = isTimeOperational(i);
                   return (
-                    <th key={i} className={`sticky top-[118px] z-[100] bg-slate-100 min-w-[18px] w-[18px] h-[22px] text-[8px] text-slate-500 font-medium border-b-2 border-slate-300 text-center ${!operational ? 'bg-slate-200' : ''}`}>
+                    <th key={i} className={`sticky top-[150px] z-[100] bg-slate-100 min-w-[18px] w-[18px] h-[22px] text-[8px] text-slate-500 font-medium border-b-2 border-slate-300 text-center ${!operational ? 'bg-slate-200' : ''}`}>
                       {t.split(':')[1]}
                     </th>
                   );
@@ -804,10 +923,17 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
                   let timeDisplay = '-';
 
                   if (row.isPrev) {
-                    startIdx = 0;
-                    endIdx = 28;
-                    shiftDisplay = 'S4';
-                    timeDisplay = '22:00 - 07:00';
+                    const sInfo = settings.shifts[row.shift_prev];
+                    if (sInfo) {
+                      const parseTime = (t: string) => {
+                        const [h, m] = t.split(':').map(Number);
+                        return h * 4 + Math.floor(m / 15);
+                      };
+                      startIdx = 0;
+                      endIdx = parseTime(sInfo.e);
+                      shiftDisplay = row.shift_prev;
+                      timeDisplay = `${sInfo.s} - ${sInfo.e}`;
+                    }
                   } else {
                     const shiftInfo = settings.shifts[row.shift];
                     if (shiftInfo) {
@@ -847,7 +973,8 @@ export const IntervalView: React.FC<IntervalViewProps> = ({ channel, date, sortB
                           if (index < 0 || index >= 96) return '';
                           const within = startIdx <= index && index < endIdx;
                           if (!within) return '';
-                          const a = row.activities?.[index];
+                          const actSource = row.isPrev ? row.prevActivities : row.activities;
+                          const a = actSource?.[index];
                           if (a) return a;
                           return '1';
                         };

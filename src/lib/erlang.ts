@@ -38,7 +38,7 @@ export function calculateAgents(
 ): number {
   try {
     if (!isOpenDay) return 0;
-    if (CallsPerHour <= 0 || AHT <= 0 || Duration <= 0) return 1;
+    if (CallsPerHour <= 0 || AHT <= 0 || Duration <= 0) return 0;
 
     let shrinkPct = MinMax(Shrinkage > 1 ? Shrinkage / 100 : Shrinkage, 0, 0.99);
     let maxOccPct = MinMax(MaxOccupancy > 1 ? MaxOccupancy / 100 : MaxOccupancy, 0.1, 1);

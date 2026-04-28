@@ -38,24 +38,68 @@ export const AdherenceView: React.FC<AdherenceViewProps> = ({ channel, date, sor
     const fetchData = async () => {
       setLoading(true);
       try {
-        // Calculate yesterday for S4 shift support
-        const dObj = new Date(date);
-        dObj.setDate(dObj.getDate() - 1);
-        const yesterday = format(dObj, 'yyyy-MM-dd');
+        // Calculate yesterday for overnight shift support
+        const yesterdayDate = new Date(date + 'T00:00:00');
+        yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+        const yesterday = format(yesterdayDate, 'yyyy-MM-dd');
 
-        const [schedules, logs, exceptions] = await Promise.all([
+        const [schedules, yesterdaySchedules, logs, exceptions] = await Promise.all([
           callSupabaseAPI('wfm_schedules', 'GET', undefined, `?date=eq.${date}&channel=eq.${encodeURIComponent(channel)}&select=*`),
+          callSupabaseAPI('wfm_schedules', 'GET', undefined, `?date=eq.${yesterday}&channel=eq.${encodeURIComponent(channel)}&select=*`),
           callSupabaseAPI('adherence_log', 'GET', undefined, `?timestamp=gte.${yesterday}T00:00:00&timestamp=lte.${date}T23:59:59&select=*&order=timestamp.asc&limit=100000`),
           callSupabaseAPI('wfm_exceptions', 'GET', undefined, `?date_str=eq.${date}&channel=eq.${encodeURIComponent(channel)}&select=*`)
         ]);
 
-        if (schedules) {
-          const combined = schedules.map((s: any) => {
-            // Filter and normalize logs for this agent
+        if (schedules || yesterdaySchedules) {
+          const sRes = schedules || [];
+          const yRes = yesterdaySchedules || [];
+          
+          const yesterdayMap: Record<string, any> = {};
+          yRes.forEach((ys: any) => {
+            yesterdayMap[ys.nik] = ys;
+          });
+
+          // All NIKs relevant for today
+          const allNiks = new Set([
+            ...sRes.map((r: any) => r.nik),
+            ...yRes.filter((yr: any) => {
+              const sInfo = settings.shifts[yr.shift];
+              return sInfo && sInfo.s > sInfo.e;
+            }).map((yr: any) => yr.nik)
+          ]);
+
+          const combinedSchedules = Array.from(allNiks).map(nik => {
+            const todaySchedule = sRes.find((r: any) => r.nik === nik);
+            const ys = yesterdayMap[nik];
+            
+            if (todaySchedule) {
+              return {
+                ...todaySchedule,
+                shift_prev: ys?.shift || 'OFF',
+                prevActivities: ys?.activities || {}
+              };
+            } else {
+              return {
+                nik,
+                nama: ys?.nama || 'Unknown',
+                tl: ys?.tl || '',
+                channel: channel,
+                date: date,
+                shift: 'OFF',
+                shift_prev: ys?.shift || 'OFF',
+                prevActivities: ys?.activities || {},
+                activities: {}
+              };
+            }
+          });
+
+          const combined = combinedSchedules.map((agent: any) => {
+            const ys = yesterdayMap[agent.nik];
+            // Normalize logs for this agent
             const agentLogs: any[] = [];
             
             logs?.forEach((l: any) => {
-              if (l.nik !== s.nik) return;
+              if (l.nik !== agent.nik) return;
               
               const logTs = l.timestamp.replace(' ', 'T');
               const logDate = logTs.split('T')[0];
@@ -100,8 +144,12 @@ export const AdherenceView: React.FC<AdherenceViewProps> = ({ channel, date, sor
               }
             });
 
-            const agentExceptions = exceptions?.filter((e: any) => e.nik === s.nik) || [];
-            return { ...s, logs: agentLogs, exceptions: agentExceptions };
+            const agentExceptions = exceptions?.filter((e: any) => e.nik === agent.nik) || [];
+            return { 
+              ...agent, 
+              logs: agentLogs, 
+              exceptions: agentExceptions 
+            };
           });
           setData(combined);
         } else {
@@ -415,10 +463,18 @@ export const AdherenceView: React.FC<AdherenceViewProps> = ({ channel, date, sor
                 return matchesTL && matchesSearch;
               })
               .sort((a, b) => {
-                // Prioritize S4 Prev logic if applicable (though adherence view handles it differently)
-                const isS4PrevA = a.shift_prev === 'S4';
-                const isS4PrevB = b.shift_prev === 'S4';
-                if (isS4PrevA !== isS4PrevB) return isS4PrevA ? -1 : 1;
+                // Prioritize Overnight Prev shifts to the top
+                const isOvernight = (s?: string) => {
+                  if (!s || s === 'OFF') return false;
+                  const def = settings.shifts[s];
+                  if (!def) return false;
+                  const [sH, sM] = def.s.split(':').map(Number);
+                  const [eH, eM] = def.e.split(':').map(Number);
+                  return (eH * 60 + eM) <= (sH * 60 + sM);
+                };
+                const isPrevA = isOvernight(a.shift_prev);
+                const isPrevB = isOvernight(b.shift_prev);
+                if (isPrevA !== isPrevB) return isPrevA ? -1 : 1;
 
                 if (sortBy === 'nama') return (a.nama || '').localeCompare(b.nama || '');
                 
@@ -431,14 +487,64 @@ export const AdherenceView: React.FC<AdherenceViewProps> = ({ channel, date, sor
               // Process Schedule Blocks
               const scheduleBlocks: any[] = [];
               
-              // Handle S4 Prev (00:00 - 07:00)
-              if (agent.shift_prev === 'S4') {
-                scheduleBlocks.push({
-                  title: 'S4 Prev',
-                  start: '00:00:00',
-                  end: '07:00:00',
-                  color: 'bg-[#60a5fa]'
-                });
+              // Handle Prev Shift (Overnight portion)
+              if (agent.shift_prev && agent.shift_prev !== 'OFF') {
+                const sDef = settings.shifts[agent.shift_prev];
+                if (sDef) {
+                  const [sH, sM] = sDef.s.split(':').map(Number);
+                  const [eH, eM] = sDef.e.split(':').map(Number);
+                  if ((eH * 60 + eM) <= (sH * 60 + sM)) {
+                    scheduleBlocks.push({
+                      title: `${agent.shift_prev} Prev`,
+                      start: '00:00:00',
+                      end: sDef.e + (sDef.e.split(':').length === 2 ? ':00' : ''),
+                      color: 'bg-[#60a5fa]'
+                    });
+                  }
+                }
+              }
+
+              // Add activities from Yesterday (for overnight portion)
+              if (agent.prevActivities) {
+                const sDef = settings.shifts[agent.shift_prev];
+                if (sDef) {
+                  const [sH, sM] = sDef.s.split(':').map(Number);
+                  const [eH, eM] = sDef.e.split(':').map(Number);
+                  if ((eH * 60 + eM) <= (sH * 60 + sM)) {
+                    // Ending index today
+                    const endPortionIdx = eH * 4 + Math.floor(eM / 15);
+                    
+                    let currentAct = null;
+                    let startIdx = 0;
+                    for (let i = 0; i <= endPortionIdx; i++) {
+                      const act = agent.prevActivities[i];
+                      if (act !== currentAct) {
+                        if (currentAct) {
+                          const startH = Math.floor((startIdx * 15) / 60);
+                          const startM = (startIdx * 15) % 60;
+                          const endH = Math.floor((i * 15) / 60);
+                          const endM = (i * 15) % 60;
+                          
+                          let bgClass = 'bg-yellow-400';
+                          let actNameLabel = currentAct;
+                          if (settings.activities?.[currentAct]) {
+                            bgClass = settings.activities[currentAct].color;
+                            actNameLabel = settings.activities[currentAct].label;
+                          }
+                          
+                          scheduleBlocks.push({
+                            title: actNameLabel,
+                            start: `${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')}:00`,
+                            end: `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}:00`,
+                            color: bgClass
+                          });
+                        }
+                        currentAct = act;
+                        startIdx = i;
+                      }
+                    }
+                  }
+                }
               }
 
               if (agent.shift !== 'OFF' && agent.shift) {
@@ -551,9 +657,20 @@ export const AdherenceView: React.FC<AdherenceViewProps> = ({ channel, date, sor
               const adherenceScore = calculateAdherenceScore(agent, scheduleBlocks, adherenceBlocks);
 
               let shiftDisplay = agent.shift;
-              if (agent.shift_prev === 'S4' && agent.shift === 'S4') shiftDisplay = 'S4';
-              else if (agent.shift_prev === 'S4' && agent.shift === 'OFF') shiftDisplay = 'S4 Prev';
-              else if (agent.shift_prev === 'S4') shiftDisplay = 'S4 Prev + ' + agent.shift;
+              const isOvernightPrev = (s?: string) => {
+                if (!s || s === 'OFF') return false;
+                const def = settings.shifts[s];
+                if (!def) return false;
+                const [sH, sM] = (def.s || '').split(':').map(Number);
+                const [eH, eM] = (def.e || '').split(':').map(Number);
+                return (eH * 60 + eM) <= (sH * 60 + sM);
+              };
+
+              if (isOvernightPrev(agent.shift_prev)) {
+                if (agent.shift === agent.shift_prev) shiftDisplay = agent.shift;
+                else if (agent.shift === 'OFF') shiftDisplay = agent.shift_prev + ' Prev';
+                else shiftDisplay = agent.shift_prev + ' Prev + ' + agent.shift;
+              }
 
               return (
                 <div key={agent.nik} className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">

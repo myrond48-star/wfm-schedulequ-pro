@@ -367,12 +367,14 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
        
        if (!isClosed) {
            const info = getDayInfo(compD);
-           // Default OFF is 2/7 of total HC (assuming 5 work days)
+           // Default OFF ratio: If working 5 days out of 7, 2/7 are off
            let offRatio = 2 / 7;
            
-           // Jika ada holiday menyesuaikan (if holiday and open, maybe assume 50% are off)
-           if (info.isHoliday || info.isWeekend) {
-               offRatio = 0.5; 
+           // Jika ada holiday atau weekend menyesuaikan (if holiday or weekend, potentially more/less agents off)
+           if (info.isHoliday) {
+               offRatio = 0.6; // Higher off ratio for holidays if we stay open
+           } else if (info.isWeekend) {
+               offRatio = 0.4; // Slightly more off on weekends
            }
            
            const offCount = Math.round(availableHeadcount * offRatio);
@@ -392,11 +394,14 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
              
              const avg = shiftWeekAverages[n];
              let modulation = 1;
+             
+             // Dynamic modulation based on today's interval requirements for this specific shift
              if (avg > 0) {
                  modulation = (shiftDayNeeded[dt][n] || 0) / avg;
              }
              
-             const modWeight = baseDist * modulation;
+             // Additional smoothing to ensure we don't zero out shifts unless workload is zero
+             const modWeight = baseDist * (modulation > 0 ? modulation : 0.1);
              modulatedWeights[n] = modWeight;
              sumModulated += modWeight;
           });
@@ -726,9 +731,21 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
             }
           };
 
-          // Handle S4 Prev (Overnight shift from yesterday covering 00:00 - 07:00)
-          if (row.shift_prev === 'S4') {
-            processShift(0, 28, row.activities);
+          // Handle Prev shift that crosses midnight (Generic)
+          if (row.shift_prev && row.shift_prev !== 'OFF') {
+             const prevShiftInfo = settings.shifts?.[row.shift_prev];
+             if (prevShiftInfo) {
+                const parseTimeLocal = (t: string) => {
+                  const [h, m] = t.split(':').map(Number);
+                  return h * 4 + Math.floor(m / 15);
+                };
+                const pStartIdx = parseTimeLocal(prevShiftInfo.s);
+                const pEndIdx = parseTimeLocal(prevShiftInfo.e);
+                if (pEndIdx <= pStartIdx) {
+                   // Overnight shift, covers 0 to pEndIdx today
+                   processShift(0, pEndIdx, row.activities);
+                }
+             }
           }
 
           // Handle Regular Shift
@@ -4699,12 +4716,12 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ channel }) => {
                                             dailyTotal += (valFromState !== undefined ? valFromState : computedVal);
                                           });
 
-                                          const offCount = Math.max(0, availableHeadcount - dailyTotal);
-                                          const displayedTotal = dailyTotal + offCount;
+                                          const offCount = availableHeadcount - dailyTotal;
+                                          const displayedTotal = availableHeadcount;
 
                                           cells.push(
-                                            <td key={dt} className="p-3 text-center border-l border-slate-200">
-                                              <span className="text-sm font-black text-indigo-600">{displayedTotal || "-"}</span>
+                                            <td key={dt} className="p-3 text-center border-l border-slate-200 bg-indigo-50/50">
+                                              <span className="text-sm font-black text-indigo-600">{displayedTotal || availableHeadcount}</span>
                                             </td>
                                           );
                                           d.setUTCDate(d.getUTCDate() + 1);
